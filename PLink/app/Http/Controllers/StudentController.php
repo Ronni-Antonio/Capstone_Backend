@@ -12,8 +12,9 @@ class StudentController extends Controller
      */
     public function index()
     {
-        $students = Students::all();
-        return response()->json($students, 200);
+        // Get all students with their transactions and redemptions
+        $students = Students::with(['transactions', 'redemptions'])->get();
+        return response()->json($students);
     }
 
     /**
@@ -31,23 +32,30 @@ class StudentController extends Controller
     {
         try {
             $validated = $request->validate([
-                'student_number' => 'required|numeric|unique:students,student_number|min_digits:12|max_digits:12',
+                'student_number' => 'required|numeric|unique:students,student_number|max_digits:12',
                 'first_name' => 'required|string',
                 'last_name' => 'required|string',
                 'grade_level' => 'required|integer',
                 'section' => 'required|string',
                 'points_balance' => 'nullable|integer',
             ]);
-            
+
             $validated['points_balance'] = $validated['points_balance'] ?? 0;
-            
+
             $student = Students::create($validated);
-            
+
+            // Optionally, if you want to create default related records, do it here!
+            // Example: Create an initial welcome transaction
+            // $student->transactions()->create([
+            //     'bottle_qty' => 0,
+            //     'points_earned' => 10,
+            //     'transaction_date' => now()
+            // ]);
+
             return response()->json($student, 201);
         } catch (\Exception $e) {
             return response()->json([
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+                'error' => $e->getMessage()
             ], 500);
         }
     }
@@ -57,7 +65,8 @@ class StudentController extends Controller
      */
     public function show(string $id)
     {
-        //
+        $student = Students::with(['transactions', 'redemptions'])->findOrFail($id);
+        return response()->json($student);
     }
 
     /**
