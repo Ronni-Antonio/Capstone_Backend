@@ -13,7 +13,8 @@ class TransactionController extends Controller
      */
     public function index()
     {
-        //
+        $transactions = Transactions::with(['student'])->get();
+        return response()->json($transactions);
     }
 
     /**

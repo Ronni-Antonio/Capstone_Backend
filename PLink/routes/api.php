@@ -23,4 +23,7 @@ Route::resource("rewards", RewardController::class);
 Route::post("auth/login", [AuthController::class, "login"]);
 Route::post("auth/logout", [AuthController::class, "logout"])->middleware('auth:sanctum');
 
+// Import students from CSV
+Route::post('students/import-csv', [StudentController::class, 'importCSV']);
+
 
