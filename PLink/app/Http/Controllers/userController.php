@@ -1,8 +1,8 @@
 <?php
 
 namespace App\Http\Controllers;
-use App\Models\User;
 
+use App\Models\User;
 use Illuminate\Http\Request;
 
 class userController extends Controller
@@ -13,7 +13,7 @@ class userController extends Controller
     public function index()
     {
         $users = User::select(["id", "name", "email"])->get();
-               return response()-> json($users);
+        return response()->json($users);
     }
 
     /**
@@ -35,7 +35,7 @@ class userController extends Controller
             "password" => $request->password,
         ]);
 
-        return response()-> json(["id" => $user->id, "name" => $user->name, "email" => $user->email, "password" => $user->password]);
+        return response()->json(["id" => $user->id, "name" => $user->name, "email" => $user->email, "password" => $user->password]);
     }
 
     /**
@@ -44,7 +44,23 @@ class userController extends Controller
     public function show(string $id)
     {
         $user = User::find($id);
-        return response()-> json(["id" => $user->id, "name" => $user->name, "email" => $user->email]);
+        
+        if (!$user) {
+            return response()->json(["message" => "User not found"], 404);
+        }
+        
+        return response()->json([
+            // original keys
+            "id" => $user->id,
+            "name" => $user->name,
+            "email" => $user->email,
+            "password" => $user->password,
+
+            // additional for the profile
+            "phone" => $user->phone ?? '',
+            "school" => $user->school ?? '',
+            "role" => $user->role ?? 'Eco Coordinator',
+        ]);
     }
 
     /**
@@ -62,10 +78,64 @@ class userController extends Controller
     {
         $user = User::find($id);
         
-        $user->name = $request->name;
+        if (!$user) {
+            return response()->json(["message" => "User not found"], 404);
+        }
+        
+        $user->name = $request->fullname ?? $request->name;
         $user->email = $request->email;
-        $user->password = $request->password;
+
+        if ($request->filled('password')) {
+              $user->password = $request->password;
+        }
+
+        // additional for the profile
+        if ($request->has('phone'))  $user->phone = $request->phone;
+        if ($request->has('school')) $user->school = $request->school;
+        if ($request->has('role'))   $user->role = $request->role;
+        
         $user->save();
+
+        // for editing in the profile
+        return response()->json([
+            "success" => true,
+            "message" => "Profile updated Successfully"
+        ]);
+    }
+
+    /**
+     * profile: handle the password card
+     */
+    public function updatePassword(Request $request, string $id)
+    {
+        $user = User::find($id);
+
+        if (!$user) {
+            return response()->json(["message" => "User not found"], 404);
+        }
+
+        // validation of fields TO SEND IN THE REACT
+        $request->validate([
+            'current' => 'required',
+            'newPass' => 'required|string|min:8',
+        ]);
+
+        // verify current pass
+       if (!\Illuminate\Support\Facades\Hash::check($request->current, $user->password) && $request->current !== $user->password) {
+            return response()->json([
+                "success" => false,
+                "message" => "Current password does not match"
+            ], 400);
+        }
+
+        // FIXED: Hash the new password so it stays secure and works with your login system
+        $user->password = \Illuminate\Support\Facades\Hash::make($request->newPass);
+        $user->save();
+
+        return response()->json([
+            "success" => true,
+            "message" => "Password Security Updated Successfully."
+        ]);
     }
 
     /**
@@ -74,5 +144,6 @@ class userController extends Controller
     public function destroy(string $id)
     {
         User::destroy($id);
+        return response()->json(["message" => "User deleted successfully"]);
     }
 }

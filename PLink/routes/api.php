@@ -10,10 +10,11 @@ use App\Http\Controllers\TransactionController as TransactionController;
 use App\Http\Controllers\RedemptionController as RedemptionController;
 use App\Http\Controllers\RewardController as RewardController;
 
+
 Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');
-
+Route::put('users/{id}/password', [userController::class, 'updatePassword']);
 Route::resource("users", userController::class);
 Route::resource("collection", CollectionController::class);
 Route::resource("students", StudentController::class);
