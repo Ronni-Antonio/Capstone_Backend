@@ -15,7 +15,7 @@ class User extends Authenticatable
     use HasFactory, Notifiable;
     use HasApiTokens;
 
-       /**
+    /**
      * The attributes that are mass assignable.
      *
      * @var list<string>
@@ -24,6 +24,11 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
+        
+        // PROFILE ADDITIONS: Allow mass assignment for your new profile fields
+        'phone',
+        'school',
+        'role',
     ];
 
     /**
@@ -45,7 +50,9 @@ class User extends Authenticatable
     {
         return [
             'email_verified_at' => 'datetime',
-            'password' => 'hashed',
+            // Note: Since you use plain-text checks in your login/password update, 
+            // you might want to remove or comment out 'password' => 'hashed' if password checking fails!
+            'password' => 'hashed', 
         ];
     }
 }
