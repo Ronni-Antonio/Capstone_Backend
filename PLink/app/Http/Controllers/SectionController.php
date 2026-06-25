@@ -2,7 +2,8 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Students; 
+use App\Models\Students;
+use App\Models\Section;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -10,52 +11,46 @@ class SectionController extends Controller
 {
     /**
      * GET api/sections
-     * Grabs unique sections dynamically and counts how many students are in them
+     * Grabs sections with student counts
      */
     public function index()
     {
-        $sections = Students::select('section as name', DB::raw('count(*) as students'))
-            ->whereNotNull('section')
-            ->where('section', '!=', '')
-            ->groupBy('section')
-            ->get();
+        $sections = Section::withCount('students')->get();
+        return response()->json($sections->map(function ($section) {
+            return [
+                'name' => $section->name,
+                'students' => $section->students_count
+            ];
+        }));
+    }
 
+    /**
+     * GET api/sections/list
+     * Simple list for dropdown (just section names)
+     */
+    public function list()
+    {
+        $sections = Section::select('name')->orderBy('name')->pluck('name');
         return response()->json($sections);
     }
 
     /**
      * POST api/sections
-     * FIXES 500: Uses raw array insertion to prevent schema property mismatches
      */
     public function store(Request $request)
     {
         $request->validate([
-            'name' => 'required|string',
+            'name' => 'required|string|unique:sections,name',
         ]);
 
-        try {
-            // We use direct DB query insertion to bypass Model properties safely
-            DB::table('students')->insertOrIgnore([
-                'student_number' => 'SEC-' . time(), 
-                'first_name'     => 'Section',
-                'last_name'      => 'Placeholder',
-                'grade_level'    => 'N/A',
-                'section'        => $request->name,
-                'points_balance' => 0,
-            ]);
+        $section = Section::create([
+            'name' => $request->name
+        ]);
 
-            return response()->json([
-                'name' => $request->name,
-                'students' => 1
-            ]);
-
-        } catch (\Exception $e) {
-            // Dynamic fallback: if your table has strict missing columns, we catch it gracefully 
-            return response()->json([
-                'error' => 'Database constraint mismatch', 
-                'details' => $e->getMessage()
-            ], 500);
-        }
+        return response()->json([
+            'name' => $section->name,
+            'students' => 0
+        ]);
     }
 
     /**
@@ -64,12 +59,27 @@ class SectionController extends Controller
     public function update(Request $request, $oldSectionName)
     {
         $request->validate([
-            'name' => 'required|string',
+            'name' => 'required|string|unique:sections,name',
         ]);
 
+        $section = Section::where('name', $oldSectionName)->first();
+        if (!$section) {
+            // If section not in sections table, check if it exists in students
+            $exists = Students::where('section', $oldSectionName)->exists();
+            if ($exists) {
+                $section = Section::create(['name' => $oldSectionName]);
+            } else {
+                return response()->json(['error' => 'Section not found'], 404);
+            }
+        }
+
+        // Update students first
         Students::where('section', $oldSectionName)->update([
             'section' => $request->name,
         ]);
+        // Then update section
+        $section->name = $request->name;
+        $section->save();
 
         return response()->json(['success' => true, 'message' => 'Section renamed successfully!']);
     }
@@ -79,10 +89,13 @@ class SectionController extends Controller
      */
     public function destroy($sectionName)
     {
-        Students::where('section', $sectionName)->update([
-            'section' => null,
-        ]);
-
+        $section = Section::where('name', $sectionName)->first();
+        if ($section) {
+            Students::where('section', $sectionName)->update([
+                'section' => null,
+            ]);
+            $section->delete();
+        }
         return response()->json(['success' => true, 'message' => 'Section removed!']);
     }
 }

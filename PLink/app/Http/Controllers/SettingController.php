@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\systemSettings;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 class SettingController extends Controller
 {
@@ -61,10 +62,45 @@ class SettingController extends Controller
      */
     public function store(Request $request)
     {
-        $schoolInfo = $request->input('schoolInfo', []);
-        $points = $request->input('points', []);
-        $notifications = $request->input('notifications', []);
-        $autoBackup = $request->input('autoBackup', true);
+        return $this->updateSettings($request);
+    }
+
+    /**
+     * PUT/PATCH api/settings
+     */
+    public function update(Request $request)
+    {
+        return $this->updateSettings($request);
+    }
+
+    /**
+     * Helper to update settings
+     */
+    private function updateSettings(Request $request)
+    {
+        // Log ALL possible request data for debugging
+        Log::info('=== SYSTEM SETTINGS UPDATE DEBUG ===', [
+            'method' => $request->method(),
+            'all()' => $request->all(),
+            'json()' => $request->json()->all(),
+            'getContent()' => $request->getContent(),
+            'headers' => $request->headers->all(),
+        ]);
+
+        // Try to get data from both input() and json()
+        $allData = array_merge($request->all(), $request->json()->all());
+
+        $schoolInfo = $allData['schoolInfo'] ?? $request->input('schoolInfo', []);
+        $points = $allData['points'] ?? $request->input('points', []);
+        $notifications = $allData['notifications'] ?? $request->input('notifications', []);
+        $autoBackup = $allData['autoBackup'] ?? $request->input('autoBackup', true);
+
+        Log::info('Parsed data', [
+            'schoolInfo' => $schoolInfo,
+            'points' => $points,
+            'notifications' => $notifications,
+            'autoBackup' => $autoBackup
+        ]);
 
         // Unified updateOrCreate payload
         $settings = systemSettings::updateOrCreate(
@@ -74,23 +110,25 @@ class SettingController extends Controller
                 'school_address' => $schoolInfo['address'] ?? null,
                 'school_year' => $schoolInfo['year'] ?? null,
                 'school_email' => $schoolInfo['email'] ?? null,
-                
+
                 'point_conversion' => $points['conversion'] ?? 5,
                 'penalty_rejected' => $points['rejected'] ?? -1,
                 'penalty_invalid' => $points['invalid'] ?? -2,
                 'penalty_non_pet' => $points['nonPet'] ?? -1,
-                'penalty_custom' => $points['custom'] ?? -1, // FIXED: Matches your migration column perfectly
-                
+                'penalty_custom' => $points['custom'] ?? -1,
+
                 'notify_machine_full' => $notifications['machineFull'] ?? true,
                 'notify_scanner_errors' => $notifications['scannerErrors'] ?? true,
                 'notify_machine_offline' => $notifications['machineOffline'] ?? true,
                 'notify_maintenance' => $notifications['maintenance'] ?? true,
                 'notify_weekly_summary' => $notifications['weeklySummary'] ?? false,
                 'notify_milestones' => $notifications['milestones'] ?? true,
-                
+
                 'auto_backup' => $autoBackup,
             ]
         );
+
+        Log::info('Updated system settings', ['settings' => $settings->toArray()]);
 
         return response()->json([
             'success' => true,
@@ -99,3 +137,4 @@ class SettingController extends Controller
         ]);
     }
 }
+

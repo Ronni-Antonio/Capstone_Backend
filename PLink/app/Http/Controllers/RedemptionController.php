@@ -14,8 +14,9 @@ class RedemptionController extends Controller
      */
     public function index()
     {
-        //
-    }
+        $redemptions = Redemptions::all();
+        return response()->json($redemptions);
+       }
 
     /**
      * Show the form for creating a new resource.
@@ -34,7 +35,6 @@ class RedemptionController extends Controller
             $validated = $request->validate([
                 'student_id' => 'required|exists:students,student_id',
                 'reward_id' => 'required|exists:rewards,reward_id',
-                'points_spent' => 'required|integer|min:1',
                 'redemption_date' => 'nullable|date'
             ]);
 
@@ -43,30 +43,45 @@ class RedemptionController extends Controller
                 $validated['redemption_date'] = now();
             }
 
-            // Check if student has enough points
+            // Get the student
             $student = Students::findOrFail($validated['student_id']);
-            if ($student->points_balance < $validated['points_spent']) {
-                return response()->json(['error' => 'Insufficient points balance'], 422);
+            
+            // Get the reward and its points cost
+            $reward = Rewards::findOrFail($validated['reward_id']);
+            
+            // Check if student has enough points
+            if ($student->points_balance < $reward->points_cost) {
+                return response()->json([
+                    'error' => 'Insufficient points balance',
+                    'required' => $reward->points_cost,
+                    'current' => $student->points_balance
+                ], 422);
             }
 
             // Check if reward has enough stock
-            $reward = Rewards::findOrFail($validated['reward_id']);
             if ($reward->stock_quantity <= 0) {
                 return response()->json(['error' => 'Reward out of stock'], 422);
             }
+
+            // Add the actual points cost to validated data for creating redemption
+            $validated['points_spent'] = $reward->points_cost;
 
             // Create redemption
             $redemption = Redemptions::create($validated);
 
             // Update student's points balance
-            $student->points_balance -= $validated['points_spent'];
+            $student->points_balance -= $reward->points_cost;
             $student->save();
 
             // Update reward's stock quantity
             $reward->stock_quantity -= 1;
             $reward->save();
 
-            return response()->json($redemption, 201);
+            return response()->json([
+                'success' => true,
+                'redemption' => $redemption,
+                'student' => $student
+            ], 201);
         } catch (\Exception $e) {
             return response()->json([
                 'error' => $e->getMessage()

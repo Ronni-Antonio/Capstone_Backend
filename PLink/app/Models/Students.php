@@ -33,8 +33,20 @@ class Students extends Model
         return $this->hasMany(Redemptions::class, 'student_id', 'student_id');
     }
 
-        public function transactions_points(): BelongsTo
+    public function transactions_points(): BelongsTo
     {
         return $this->belongsTo(Transactions::class, 'points_earned', 'points_balance');
+    }
+
+    // One student has many notifications
+    public function notifications(): HasMany
+    {
+        return $this->hasMany(Notification::class, 'student_id', 'student_id');
+    }
+
+    // One student has many recycling sessions
+    public function recyclingSessions(): HasMany
+    {
+        return $this->hasMany(RecyclingSession::class, 'student_id', 'student_id');
     }
 }
