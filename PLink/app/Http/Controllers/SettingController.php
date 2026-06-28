@@ -27,7 +27,24 @@ class SettingController extends Controller
                     'machineFull' => true, 'scannerErrors' => true, 'machineOffline' => true,
                     'maintenance' => true, 'weeklySummary' => false, 'milestones' => true
                 ],
-                'autoBackup' => true
+                'autoBackup' => true,
+                // Also include flat format for frontend convenience
+                'school_name' => '',
+                'school_address' => '',
+                'school_year' => '',
+                'school_email' => '',
+                'point_conversion' => 5,
+                'penalty_rejected' => -1,
+                'penalty_invalid' => -2,
+                'penalty_non_pet' => -1,
+                'penalty_custom' => -1,
+                'notify_machine_full' => true,
+                'notify_scanner_errors' => true,
+                'notify_machine_offline' => true,
+                'notify_maintenance' => true,
+                'notify_weekly_summary' => false,
+                'notify_milestones' => true,
+                'auto_backup' => true
             ]);
         }
 
@@ -53,7 +70,24 @@ class SettingController extends Controller
                 'weeklySummary' => $settings->notify_weekly_summary,
                 'milestones' => $settings->notify_milestones,
             ],
-            'autoBackup' => $settings->auto_backup
+            'autoBackup' => $settings->auto_backup,
+            // Also include flat format for frontend convenience
+            'school_name' => $settings->school_name,
+            'school_address' => $settings->school_address,
+            'school_year' => $settings->school_year,
+            'school_email' => $settings->school_email,
+            'point_conversion' => $settings->point_conversion,
+            'penalty_rejected' => $settings->penalty_rejected,
+            'penalty_invalid' => $settings->penalty_invalid,
+            'penalty_non_pet' => $settings->penalty_non_pet,
+            'penalty_custom' => $settings->penalty_custom,
+            'notify_machine_full' => $settings->notify_machine_full,
+            'notify_scanner_errors' => $settings->notify_scanner_errors,
+            'notify_machine_offline' => $settings->notify_machine_offline,
+            'notify_maintenance' => $settings->notify_maintenance,
+            'notify_weekly_summary' => $settings->notify_weekly_summary,
+            'notify_milestones' => $settings->notify_milestones,
+            'auto_backup' => $settings->auto_backup
         ]);
     }
 
@@ -90,42 +124,52 @@ class SettingController extends Controller
         // Try to get data from both input() and json()
         $allData = array_merge($request->all(), $request->json()->all());
 
-        $schoolInfo = $allData['schoolInfo'] ?? $request->input('schoolInfo', []);
-        $points = $allData['points'] ?? $request->input('points', []);
-        $notifications = $allData['notifications'] ?? $request->input('notifications', []);
-        $autoBackup = $allData['autoBackup'] ?? $request->input('autoBackup', true);
+        // Support both formats: nested (schoolInfo/points) AND flat
+        $school_name = $allData['school_name'] ?? ($allData['schoolInfo']['name'] ?? null);
+        $school_address = $allData['school_address'] ?? ($allData['schoolInfo']['address'] ?? null);
+        $school_year = $allData['school_year'] ?? ($allData['schoolInfo']['year'] ?? null);
+        $school_email = $allData['school_email'] ?? ($allData['schoolInfo']['email'] ?? null);
 
-        Log::info('Parsed data', [
-            'schoolInfo' => $schoolInfo,
-            'points' => $points,
-            'notifications' => $notifications,
-            'autoBackup' => $autoBackup
+        $point_conversion = $allData['point_conversion'] ?? ($allData['points']['conversion'] ?? 5);
+        $penalty_rejected = $allData['penalty_rejected'] ?? ($allData['points']['rejected'] ?? -1);
+        $penalty_invalid = $allData['penalty_invalid'] ?? ($allData['points']['invalid'] ?? -2);
+        $penalty_non_pet = $allData['penalty_non_pet'] ?? ($allData['points']['nonPet'] ?? -1);
+        $penalty_custom = $allData['penalty_custom'] ?? ($allData['points']['custom'] ?? -1);
+
+        $notify_machine_full = $allData['notify_machine_full'] ?? ($allData['notifications']['machineFull'] ?? true);
+        $notify_scanner_errors = $allData['notify_scanner_errors'] ?? ($allData['notifications']['scannerErrors'] ?? true);
+        $notify_machine_offline = $allData['notify_machine_offline'] ?? ($allData['notifications']['machineOffline'] ?? true);
+        $notify_maintenance = $allData['notify_maintenance'] ?? ($allData['notifications']['maintenance'] ?? true);
+        $notify_weekly_summary = $allData['notify_weekly_summary'] ?? ($allData['notifications']['weeklySummary'] ?? false);
+        $notify_milestones = $allData['notify_milestones'] ?? ($allData['notifications']['milestones'] ?? true);
+
+        $auto_backup = $allData['auto_backup'] ?? ($allData['autoBackup'] ?? true);
+
+        // Convert 0/1 to actual boolean values
+        $notify_machine_full = (bool)$notify_machine_full;
+        $notify_scanner_errors = (bool)$notify_scanner_errors;
+        $notify_machine_offline = (bool)$notify_machine_offline;
+        $notify_maintenance = (bool)$notify_maintenance;
+        $notify_weekly_summary = (bool)$notify_weekly_summary;
+        $notify_milestones = (bool)$notify_milestones;
+        $auto_backup = (bool)$auto_backup;
+
+        Log::info('Final data to save', [
+            'school_name' => $school_name,
+            'point_conversion' => $point_conversion,
+            'notify_machine_full' => $notify_machine_full
         ]);
 
         // Unified updateOrCreate payload
         $settings = systemSettings::updateOrCreate(
             ['setting_id' => 1],
-            [
-                'school_name' => $schoolInfo['name'] ?? null,
-                'school_address' => $schoolInfo['address'] ?? null,
-                'school_year' => $schoolInfo['year'] ?? null,
-                'school_email' => $schoolInfo['email'] ?? null,
-
-                'point_conversion' => $points['conversion'] ?? 5,
-                'penalty_rejected' => $points['rejected'] ?? -1,
-                'penalty_invalid' => $points['invalid'] ?? -2,
-                'penalty_non_pet' => $points['nonPet'] ?? -1,
-                'penalty_custom' => $points['custom'] ?? -1,
-
-                'notify_machine_full' => $notifications['machineFull'] ?? true,
-                'notify_scanner_errors' => $notifications['scannerErrors'] ?? true,
-                'notify_machine_offline' => $notifications['machineOffline'] ?? true,
-                'notify_maintenance' => $notifications['maintenance'] ?? true,
-                'notify_weekly_summary' => $notifications['weeklySummary'] ?? false,
-                'notify_milestones' => $notifications['milestones'] ?? true,
-
-                'auto_backup' => $autoBackup,
-            ]
+            compact(
+                'school_name', 'school_address', 'school_year', 'school_email',
+                'point_conversion', 'penalty_rejected', 'penalty_invalid', 'penalty_non_pet', 'penalty_custom',
+                'notify_machine_full', 'notify_scanner_errors', 'notify_machine_offline',
+                'notify_maintenance', 'notify_weekly_summary', 'notify_milestones',
+                'auto_backup'
+            )
         );
 
         Log::info('Updated system settings', ['settings' => $settings->toArray()]);
