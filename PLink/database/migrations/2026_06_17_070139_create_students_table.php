@@ -17,6 +17,7 @@ return new class extends Migration {
             $table->string('last_name');
             $table->integer('grade_level');
             $table->string('section');
+            $table->string('status')->default('inactive');
             $table->integer('points_balance');
             $table->timestamps();
         });

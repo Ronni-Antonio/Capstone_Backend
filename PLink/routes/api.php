@@ -32,6 +32,11 @@ Route::resource("rewards", RewardController::class);
 Route::resource("plasticTypes", PlasticTypeController::class);
 Route::post("auth/login", [AuthController::class, "login"]);
 Route::post("auth/logout", [AuthController::class, "logout"])->middleware('auth:sanctum');
+
+// Forgot Password Routes
+Route::post('auth/forgot-password/send-otp', [\App\Http\Controllers\ForgotPasswordController::class, 'sendOtp']);
+Route::post('auth/forgot-password/verify-otp', [\App\Http\Controllers\ForgotPasswordController::class, 'verifyOtp']);
+Route::post('auth/forgot-password/reset', [\App\Http\Controllers\ForgotPasswordController::class, 'resetPassword']);
 // System Settings routes
 Route::get("settings", [SettingController::class, 'index']);
 Route::post("settings", [SettingController::class, 'store']);
@@ -39,6 +44,9 @@ Route::post("settings", [SettingController::class, 'store']);
 // Section routes
 Route::get('sections', [SectionController::class, 'index']);
 Route::get('sections/list', [SectionController::class, 'list']);
+Route::get('sections/ranking', [SectionController::class, 'sectionRankingOverall']);
+Route::get('sections/ranking/overall', [SectionController::class, 'overallRanking']);
+Route::get('sections/{sectionName}/ranking', [SectionController::class, 'sectionRanking']);
 Route::post('sections', [SectionController::class, 'store']);
 Route::put('sections/{sectionName}', [SectionController::class, 'update']);
 Route::delete('sections/{sectionName}', [SectionController::class, 'destroy']);
@@ -46,6 +54,8 @@ Route::delete('sections/{sectionName}', [SectionController::class, 'destroy']);
 
 // Import students from CSV
 Route::post('students/import-csv', [StudentController::class, 'importCSV']);
+// Activate a student's card
+Route::post('students/{id}/activate', [StudentController::class, 'activate']);
 // Process detailed transaction with classification data
 Route::post('transactions/process', [TransactionController::class, 'processTransaction']);
 

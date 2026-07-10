@@ -18,6 +18,7 @@ class Students extends Model
         'last_name',
         'grade_level',
         'section',
+        'status',
         'points_balance'
     ];
 
