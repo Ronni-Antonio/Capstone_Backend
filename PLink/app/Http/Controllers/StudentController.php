@@ -121,6 +121,7 @@ class StudentController extends Controller
                 'last_name' => 'required|string',
                 'grade_level' => 'required|integer',
                 'section' => 'required|string',
+
             ]);
 
             if ($validator->fails()) {
@@ -134,6 +135,7 @@ class StudentController extends Controller
 
             // Add default points balance
             $studentData['points_balance'] = 0;
+            $studentData['status'] = 'inactive';
 
             // Create the student
             try {
@@ -179,7 +181,44 @@ class StudentController extends Controller
      */
     public function update(Request $request, string $id)
     {
-        //
+        try {
+            $student = Students::findOrFail($id);
+            
+            $validated = $request->validate([
+                'student_number' => 'numeric|unique:students,student_number,' . $id . ',student_id|max_digits:12',
+                'first_name' => 'string',
+                'last_name' => 'string',
+                'grade_level' => 'integer',
+                'section' => 'string',
+                'status' => 'in:active,inactive',
+                'points_balance' => 'integer',
+            ]);
+
+            $student->update($validated);
+
+            return response()->json($student, 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Activate a student's card
+     */
+    public function activate(string $id)
+    {
+        try {
+            $student = Students::findOrFail($id);
+            $student->update(['status' => 'active']);
+            
+            return response()->json($student, 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 
     /**
@@ -187,6 +226,15 @@ class StudentController extends Controller
      */
     public function destroy(string $id)
     {
-        //
+        try {
+            $student = Students::findOrFail($id);
+            $student->delete();
+            
+            return response()->json(null, 204);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 }
