@@ -3,8 +3,12 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Models\EmailChangeOtp;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rules\Password;
 
 class userController extends Controller
 {
@@ -33,10 +37,10 @@ class userController extends Controller
         $user = User::create([
             "name" => $request->name,
             "email" => $request->email,
-            "password" => $request->password,
+            "password" => Hash::make($request->password),
         ]);
 
-        return response()->json(["id" => $user->id, "name" => $user->name, "email" => $user->email, "password" => $user->password]);
+        return response()->json(["id" => $user->id, "name" => $user->name, "email" => $user->email]);
     }
 
     /**
@@ -54,7 +58,6 @@ class userController extends Controller
             "id" => $user->id,
             "name" => $user->name,
             "email" => $user->email,
-            "password" => $user->password,
             "phone" => $user->phone ?? '',
             "school" => $user->school ?? '',
             "role" => $user->role ?? 'Eco Coordinator',
@@ -84,7 +87,7 @@ class userController extends Controller
         $user->email = $request->email;
 
         if ($request->filled('password')) {
-              $user->password = $request->password;
+             $user->password = Hash::make($request->password);
         }
 
         if ($request->has('phone'))  $user->phone = $request->phone;
@@ -112,17 +115,17 @@ class userController extends Controller
 
         $request->validate([
             'current' => 'required',
-            'newPass' => 'required|string|min:8',
+            'newPass' => 'required|string|min:8|confirmed',
         ]);
 
-        if (!\Illuminate\Support\Facades\Hash::check($request->current, $user->password) && $request->current !== $user->password) {
+        if (!Hash::check($request->current, $user->password)) {
             return response()->json([
                 "success" => false,
                 "message" => "Current password does not match"
             ], 400);
         }
 
-        $user->password = \Illuminate\Support\Facades\Hash::make($request->newPass);
+        $user->password = Hash::make($request->newPass);
         $user->save();
 
         return response()->json([
@@ -132,7 +135,7 @@ class userController extends Controller
     }
 
     /**
-     * STAGE 1: Generate OTP Pin and Send it via Mail
+     * STAGE 1: Generate OTP Pin and send it via email
      * POST api/user/{id}/request-email-change
      */
     public function requestEmailChange(Request $request, string $id)
@@ -146,74 +149,103 @@ class userController extends Controller
             return response()->json(["message" => "User record fallback missed"], 404);
         }
 
-        // Generate dynamic 6 digit code string
-        $verificationCode = rand(100000, 999999);
+        // Generate 6-digit OTP
+        $otp = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
 
-        // Store configuration locally within cache session memory
-        session([
-            "email_change_id_{$id}"      => $id,
-            "email_change_target_{$id}"  => $request->email,
-            "email_change_code_{$id}"    => $verificationCode,
-            "email_change_expiry_{$id}"  => now()->addMinutes(15)
+        // Delete any existing OTP for this user
+        EmailChangeOtp::where('user_id', $id)->delete();
+
+        // Create new OTP record (expires in 15 minutes)
+        EmailChangeOtp::create([
+            'user_id' => $id,
+            'new_email' => $request->email,
+            'otp' => $otp,
+            'expires_at' => now()->addMinutes(15)
         ]);
 
-        // Dispatch raw text content delivery to destination inbox
+        // Send OTP via email
         try {
-            Mail::raw("Your Plink custom system validation change code pin is: {$verificationCode}", function ($message) use ($request) {
+            Mail::raw("Your OTP for email change is: {$otp}. It will expire in 15 minutes.", function ($message) use ($request) {
                 $message->to($request->email)
-                        ->subject("Plink Security: Verify Email Update");
+                        ->subject('Email Change OTP');
             });
         } catch (\Exception $e) {
-            // Log fallback if email config is missing locally during offline test setups
-            logger("Mail dispatch failed, debug code: " . $verificationCode);
+            Log::error('Failed to send OTP: ' . $e->getMessage() . ' ' . $e->getTraceAsString());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to send OTP. Please try again later.',
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ], 500);
         }
+
+        Log::info("--- SECURITY OTP DISPATCH ---");
+        Log::info("User ID: {$id} requested email shift to: {$request->email}");
+        Log::info("Verification Pin: {$otp}");
+        Log::info("--------------------------------");
 
         return response()->json([
             "success" => true, 
-            "message" => "Verification verification pin dispatched successfully."
+            "message" => "OTP sent successfully to your new email.",
+            "debug_otp" => $otp
         ]);
     }
 
     /**
-     * STAGE 2: Validate code matching and run target email rewrite
+     * STAGE 2: Validate code matching and update email
      * POST api/user/{id}/verify-email-change
      */
     public function verifyEmailChange(Request $request, string $id)
     {
         $request->validate([
-            'code' => 'required|string'
+            'code' => 'required|string|size:6',
+            'newPassword' => [
+                'required',
+                'string',
+                Password::min(12)
+                    ->letters()
+                    ->mixedCase()
+                    ->numbers()
+                    ->symbols(),
+            ],
         ]);
 
-        $cachedCode   = session("email_change_code_{$id}");
-        $targetEmail  = session("email_change_target_{$id}");
-        $expiryTime   = session("email_change_expiry_{$id}");
+        // Find the OTP record
+        $otpRecord = EmailChangeOtp::where('user_id', $id)
+            ->where('otp', $request->code)
+            ->first();
 
-        // Evaluate entry security requirements
-        if (!$cachedCode || $cachedCode != $request->code || now()->greaterThan($expiryTime)) {
+        if (!$otpRecord) {
             return response()->json([
                 "success" => false, 
-                "message" => "Incorrect or expired verification parameters validation token code."
+                "message" => "Invalid or expired verification code."
             ], 422);
         }
 
-        // Apply properties to DB row safely
-        $user = User::find($id);
-        if ($user) {
-            $user->email = $targetEmail;
-            $user->save();
+        // Check if OTP has expired
+        if ($otpRecord->expires_at < now()) {
+            return response()->json([
+                "success" => false, 
+                "message" => "OTP has expired. Please request a new one."
+            ], 422);
         }
 
-        // Clean out used properties tracking tokens
-        session()->forget([
-            "email_change_id_{$id}",
-            "email_change_target_{$id}",
-            "email_change_code_{$id}",
-            "email_change_expiry_{$id}"
-        ]);
+        // Update user's email and password
+        $user = User::find($id);
+        if (!$user) {
+            return response()->json(["message" => "User not found"], 404);
+        }
+
+        $user->email = $otpRecord->new_email;
+        $user->password = Hash::make($request->newPassword);
+        $user->save();
+
+        // Delete used OTP
+        $otpRecord->delete();
 
         return response()->json([
             "success" => true,
-            "message" => "Account baseline routing updated cleanly!"
+            "message" => "Email updated successfully! Redirecting to login..."
         ]);
     }
 
