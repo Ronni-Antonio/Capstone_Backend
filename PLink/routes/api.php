@@ -23,6 +23,9 @@ Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');
 Route::put('users/{id}/password', [userController::class, 'updatePassword']);
+//  THE FIX
+Route::post('/user/{id}/request-email-change', [userController::class, 'requestEmailChange']); 
+Route::post('/user/{id}/verify-email-change', [userController::class, 'verifyEmailChange']);
 Route::resource("users", userController::class);
 Route::resource("collection", CollectionController::class);
 Route::resource("transactions", TransactionController::class);
