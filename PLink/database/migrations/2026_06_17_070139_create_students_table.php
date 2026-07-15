@@ -18,6 +18,8 @@ return new class extends Migration {
             $table->integer('grade_level');
             $table->string('section');
             $table->string('status')->default('inactive');
+            $table->string('card_uid')->nullable()->unique();
+            $table->boolean("is_currently_scanned")->default(false);
             $table->integer('points_balance');
             $table->timestamps();
         });

@@ -19,6 +19,8 @@ class Students extends Model
         'grade_level',
         'section',
         'status',
+        'card_uid',
+        'is_currently_scanned',
         'points_balance'
     ];
 

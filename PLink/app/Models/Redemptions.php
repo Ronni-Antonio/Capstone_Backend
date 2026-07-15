@@ -14,6 +14,7 @@ class Redemptions extends Model
     protected $fillable = [
         'student_id',
         'reward_id',
+        'card_uid',
         'points_spent',
         'redemption_date'
     ];

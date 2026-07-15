@@ -25,9 +25,7 @@ Route::get('/user', function (Request $request) {
 Route::put('users/{id}/password', [userController::class, 'updatePassword']);
 Route::resource("users", userController::class);
 Route::resource("collection", CollectionController::class);
-Route::resource("students", StudentController::class);
 Route::resource("transactions", TransactionController::class);
-Route::resource("redemptions", RedemptionController::class);
 Route::resource("rewards", RewardController::class);
 Route::resource("plasticTypes", PlasticTypeController::class);
 Route::post("auth/login", [AuthController::class, "login"]);
@@ -51,13 +49,26 @@ Route::post('sections', [SectionController::class, 'store']);
 Route::put('sections/{sectionName}', [SectionController::class, 'update']);
 Route::delete('sections/{sectionName}', [SectionController::class, 'destroy']);
 
-
-// Import students from CSV
+// Student Routes
 Route::post('students/import-csv', [StudentController::class, 'importCSV']);
-// Activate a student's card
 Route::post('students/{id}/activate', [StudentController::class, 'activate']);
+Route::post('students/assign-card', [StudentController::class, 'assignCard']);
+Route::get('/students/{id}/activate/status', [StudentController::class, 'activateStatus']);
+Route::post('/students/{id}/activate/cancel', [StudentController::class, 'cancelActivation']); 
+Route::post('/students/identify-card', [StudentController::class, 'identifyCard']);
+Route::get('/students/active-scan-session', [StudentController::class, 'checkActiveScanSession']);
+Route::post('/students/clear-scan-session', [StudentController::class, 'clearScanSession']);
+Route::resource("students", StudentController::class);
+
 // Process detailed transaction with classification data
 Route::post('transactions/process', [TransactionController::class, 'processTransaction']);
+
+// Redemption Routes
+Route::get('/redemptions/initiate/{student_id}/{reward_id}/status', [RedemptionController::class, 'checkRedemptionStatus']);
+Route::post('/redemptions/initiate/{student_id}/{reward_id}', [RedemptionController::class, 'initiateRedemptionProcess']);
+Route::post('/redemptions', [RedemptionController::class, 'store']);
+Route::resource('redemptions', RedemptionController::class);
+
 
 // New resource routes
 Route::resource('machines', MachineController::class);

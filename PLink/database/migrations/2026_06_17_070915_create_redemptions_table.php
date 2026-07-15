@@ -13,10 +13,12 @@ return new class extends Migration {
         Schema::create('redemptions', function (Blueprint $table) {
             $table->bigIncrements('redemption_id')->primary();
             $table->unsignedBigInteger('student_id');
+            $table->string('card_uid')->nullable()->unique();
             $table->unsignedBigInteger('reward_id');
             $table->integer('points_spent');
             $table->datetime('redemption_date');
             
+            $table->foreign('card_uid')->references('card_uid')->on('students')->onDelete('cascade');
             $table->foreign('student_id')->references('student_id')->on('students')->onDelete('cascade');
             $table->foreign('reward_id')->references('reward_id')->on('rewards')->onDelete('cascade');
         });

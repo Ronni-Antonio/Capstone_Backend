@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\Students;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Cache;
 
 class StudentController extends Controller
 {
@@ -191,6 +192,7 @@ class StudentController extends Controller
                 'grade_level' => 'integer',
                 'section' => 'string',
                 'status' => 'in:active,inactive',
+                'card_uid' => 'nullable|string',
                 'points_balance' => 'integer',
             ]);
 
@@ -210,15 +212,128 @@ class StudentController extends Controller
     public function activate(string $id)
     {
         try {
-            $student = Students::findOrFail($id);
-            $student->update(['status' => 'active']);
-            
-            return response()->json($student, 200);
-        } catch (\Exception $e) {
-            return response()->json([
-                'error' => $e->getMessage()
-            ], 500);
+        $student = Students::findOrFail($id);
+        
+        $esp32Url = env('ESP32_URL'); // Ensure this points to http://<esp32-ip>/prepare-activation
+        if ($esp32Url) {
+            $client = new \GuzzleHttp\Client();
+            $client->post($esp32Url, [
+                'json' => [
+                    'student_id' => $student->student_id
+                ],
+                'timeout' => 5
+            ]);
         }
+        
+        return response()->json(['message' => 'Please tap card on reader now.'], 200);
+    } catch (\Exception $e) {
+        return response()->json(['error' => $e->getMessage()], 500);
+    }
+    }
+
+        public function assignCard(Request $request)
+    {
+        $request->validate([
+            'student_id' => 'required',
+            'card_uid' => 'required|string|unique:students,card_uid'
+        ]);
+
+        try {
+            $student = Students::findOrFail($request->student_id);
+            
+            // Save the hardware card UID to the user and mark active
+            $student->update([
+                'card_uid' => $request->card_uid,
+                'status' => 'active'
+            ]);
+
+            return response()->json(['status' => 'success', 'message' => 'Card paired successfully'], 200);
+        } catch (\Exception $e) {
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
+    }
+
+    public function activateStatus(string $id)
+    {
+        try {
+            $student = Students::findOrFail($id);
+            
+            // If student has card_uid and is active, return success
+            if ($student->card_uid && $student->status === 'active') {
+                return response()->json(['status' => 'success'], 200);
+            }
+            
+            // Otherwise, still pending
+            return response()->json(['status' => 'pending'], 200);
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+        }
+    }
+    public function cancelActivation(string $id)
+    {
+        // You can implement this to tell ESP32 to cancel the activation session
+        return response()->json(['message' => 'Activation cancelled'], 200);
+    }
+
+    public function identifyCard(Request $request)
+    {
+        $request->validate(['card_uid' => 'required|string']);
+
+        // 1. Reset any old active scan flags left over in the database
+        Students::where('is_currently_scanned', true)->update(['is_currently_scanned' => false]);
+
+        // 2. Find the student who tapped the card
+        $student = Students::where('card_uid', $request->card_uid)->first();
+
+        if (!$student) {
+            return response()->json(['error' => 'Unrecognized card.'], 404);
+        }
+
+        // 3. Set their database active scan flag to true
+        $student->update(['is_currently_scanned' => true]);
+
+        return response()->json([
+            'success' => true,
+            'student_id' => $student->student_id,
+            'points_balance' => $student->points_balance
+        ], 200);
+    }
+
+    /**
+     * Hit by your Frontend Long Polling Loop
+     */
+    public function checkActiveScanSession()
+    {
+        // Search the database for whichever student has an active scanning flag right now
+        $scannedStudent = Students::where('is_currently_scanned', true)->first();
+
+        if ($scannedStudent) {
+            return response()->json([
+                'student_found' => true, // Enforces exact lowercase boolean match for React
+                'student' => [
+                    'id' => $scannedStudent->student_id,
+                    'student_id' => $scannedStudent->student_id,
+                    'name' => $scannedStudent->name ?? $scannedStudent->first_name . ' ' . $scannedStudent->last_name,
+                    'points_balance' => (int) $scannedStudent->points_balance
+                ]
+            ], 200);
+        }
+
+        return response()->json([
+            'student_found' => false,
+            'student' => null
+        ], 200);
+    }
+
+    /**
+     * Hit by React when resetting or completing a checkout session
+     */
+    public function clearScanSession()
+    {
+        // Purge all scanning active flags cleanly
+        Students::where('is_currently_scanned', true)->update(['is_currently_scanned' => false]);
+        
+        return response()->json(['success' => true], 200);
     }
 
     /**
@@ -237,4 +352,6 @@ class StudentController extends Controller
             ], 500);
         }
     }
+
+    
 }
