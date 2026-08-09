@@ -3,7 +3,6 @@
 namespace App\Observers;
 
 use App\Models\systemSettings;
-use App\Models\PlasticType;
 
 class systemSettingsObserver
 {
@@ -12,7 +11,7 @@ class systemSettingsObserver
      */
     public function created(systemSettings $systemSettings): void
     {
-        $this->updatePlasticTypesPoints($systemSettings);
+        //
     }
 
     /**
@@ -20,20 +19,7 @@ class systemSettingsObserver
      */
     public function updated(systemSettings $systemSettings): void
     {
-        if ($systemSettings->isDirty('point_conversion')) {
-            $this->updatePlasticTypesPoints($systemSettings);
-        }
-    }
-
-    /**
-     * Update all plastic types' points_per_item based on point_conversion and multiplier
-     */
-    protected function updatePlasticTypesPoints(systemSettings $systemSettings): void
-    {
-        PlasticType::all()->each(function ($plasticType) use ($systemSettings) {
-            $plasticType->points_per_item = (int) round($systemSettings->point_conversion * $plasticType->multiplier);
-            $plasticType->save();
-        });
+        //
     }
 
     /**

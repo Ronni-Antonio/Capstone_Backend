@@ -1,55 +1,52 @@
 <?php
-
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-
 class Students extends Model
 {
     protected $table = 'students';
     protected $primaryKey = 'student_id';
-    public $timestamps = true;
     protected $fillable = [
-        'student_number',
-        'first_name',
-        'last_name',
-        'grade_level',
-        'section',
-        'status',
-        'card_uid',
-        'is_currently_scanned',
-        'points_balance'
+        'student_number','first_name','last_name','grade_level_id','section_id',
+        'status','points_balance'
     ];
+    protected $casts = ['points_balance' => 'integer'];
 
-    // One student has many transactions
-    public function transactions(): HasMany
+    public function gradeLevel(): BelongsTo
     {
-        return $this->hasMany(Transactions::class, 'student_id', 'student_id');
+        return $this->belongsTo(GradeLevel::class, 'grade_level_id', 'grade_level_id');
     }
 
-    // One student has many redemptions
+    public function section(): BelongsTo
+    {
+        return $this->belongsTo(Section::class, 'section_id', 'section_id');
+    }
+
+    public function rfidCards(): HasMany
+    {
+        return $this->hasMany(RfidCard::class, 'student_id', 'student_id');
+    }
+
+    public function transactions(): HasMany
+    {
+        return $this->hasMany(RecyclingTransaction::class, 'student_id', 'student_id');
+    }
+
     public function redemptions(): HasMany
     {
         return $this->hasMany(Redemptions::class, 'student_id', 'student_id');
     }
 
-    public function transactions_points(): BelongsTo
+    public function pointTransactions(): HasMany
     {
-        return $this->belongsTo(Transactions::class, 'points_earned', 'points_balance');
+        return $this->hasMany(PointTransaction::class, 'student_id', 'student_id');
     }
 
-    // One student has many notifications
     public function notifications(): HasMany
     {
         return $this->hasMany(Notification::class, 'student_id', 'student_id');
-    }
-
-    // One student has many recycling sessions
-    public function recyclingSessions(): HasMany
-    {
-        return $this->hasMany(RecyclingSession::class, 'student_id', 'student_id');
     }
 }

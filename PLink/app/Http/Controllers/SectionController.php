@@ -1,238 +1,94 @@
 <?php
-
 namespace App\Http\Controllers;
 
-use App\Models\Students;
-use App\Models\Transactions;
 use App\Models\Section;
+use App\Models\Students;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 
 class SectionController extends Controller
 {
-    /**
-     * GET api/sections
-     * Grabs sections with student counts
-     */
     public function index()
     {
-        $sections = Section::withCount('students')->get();
-        return response()->json($sections->map(function ($section) {
-            return [
-                'name' => $section->name,
-                'students' => $section->students_count
-            ];
-        }));
+        return response()->json(Section::withCount('students')->get()->map(fn($s)=>[
+            'section_id'=>$s->section_id,'name'=>$s->name,'students'=>$s->students_count
+        ]));
     }
 
-    /**
-     * GET api/sections/list
-     * Simple list for dropdown (just section names)
-     */
-    public function list()
-    {
-        $sections = Section::select('name')->orderBy('name')->pluck('name');
-        return response()->json($sections);
-    }
+    public function list(){ return response()->json(Section::orderBy('name')->get(['section_id','name'])); }
 
-    /**
-     * POST api/sections
-     */
     public function store(Request $request)
     {
-        $request->validate([
-            'name' => 'required|string|unique:sections,name',
-        ]);
-
-        $section = Section::create([
-            'name' => $request->name
-        ]);
-
-        return response()->json([
-            'name' => $section->name,
-            'students' => 0
-        ]);
+        $v=$request->validate(['name'=>'required|string|max:255|unique:sections,name']);
+        return response()->json(Section::create($v),201);
     }
 
-    /**
-     * PUT api/sections/{oldSectionName}
-     */
-    public function update(Request $request, $oldSectionName)
+    public function update(Request $request,string $id)
     {
-        $request->validate([
-            'name' => 'required|string|unique:sections,name',
-        ]);
-
-        $section = Section::where('name', $oldSectionName)->first();
-        if (!$section) {
-            // If section not in sections table, check if it exists in students
-            $exists = Students::where('section', $oldSectionName)->exists();
-            if ($exists) {
-                $section = Section::create(['name' => $oldSectionName]);
-            } else {
-                return response()->json(['error' => 'Section not found'], 404);
-            }
-        }
-
-        // Update students first
-        Students::where('section', $oldSectionName)->update([
-            'section' => $request->name,
-        ]);
-        // Then update section
-        $section->name = $request->name;
-        $section->save();
-
-        return response()->json(['success' => true, 'message' => 'Section renamed successfully!']);
+        $section=Section::findOrFail($id);
+        $v=$request->validate(['name'=>'required|string|max:255|unique:sections,name,'.$section->section_id.',section_id']);
+        $section->update($v);
+        return response()->json($section);
     }
 
-    /**
-     * DELETE api/sections/{sectionName}
-     */
-    public function destroy($sectionName)
+    public function destroy(string $id)
     {
-        $section = Section::where('name', $sectionName)->first();
-        if ($section) {
-            Students::where('section', $sectionName)->update([
-                'section' => null,
-            ]);
-            $section->delete();
-        }
-        return response()->json(['success' => true, 'message' => 'Section removed!']);
+        $section=Section::findOrFail($id);
+        if($section->students()->exists()) return response()->json(['error'=>'Section still has students. Reassign them first.'],409);
+        $section->delete();
+        return response()->json(null,204);
     }
 
-    /**
-     * GET api/sections/{sectionName}/ranking
-     * Get student ranking for a specific section with total points and bottles
-     */
-    public function sectionRanking($sectionName)
+    public function sectionRanking(string $id)
     {
-        $students = Students::where('section', $sectionName)
-            ->get()
-            ->map(function ($student) {
-                // Calculate totals directly from transactions
-                $totalPoints = $student->transactions()->sum('points_earned');
-                $totalBottles = $student->transactions()->sum('bottle_qty');
-                
-                return [
-                    'student_id' => $student->student_id,
-                    'student_number' => $student->student_number,
-                    'first_name' => $student->first_name,
-                    'last_name' => $student->last_name,
-                    'grade_level' => $student->grade_level,
-                    'section' => $student->section,
-                    'points_balance' => $student->points_balance,
-                    'total_points' => $totalPoints,
-                    'total_bottles' => $totalBottles
-                ];
-            })
-            ->sortByDesc('total_points') // Sort by total points descending
-            ->values() // Reindex keys
-            ->map(function ($student, $index) {
-                $student['rank'] = $index + 1; // Add rank number
-                return $student;
-            });
+        $section=Section::findOrFail($id);
+        $students=Students::where('section_id',$section->section_id)
+            ->with('gradeLevel')
+            ->withSum(['pointTransactions as total_points'=>fn($q)=>$q->where('transaction_type','earned')],'points')
+            ->get();
 
-        return response()->json([
-            'section' => $sectionName,
-            'ranking' => $students
-        ]);
-    }
+        $ranking=$students->sortByDesc('total_points')->values()->map(function($s,$i)use($section){
+            $totalBottles=\App\Models\RecyclingItem::whereHas(
+                'transaction',
+                fn($q)=>$q->where('student_id',$s->student_id)
+            )->count();
 
-    /**
-     * GET api/sections/ranking/overall
-     * Get overall student ranking across all sections
-     */
-    public function overallRanking()
-    {
-        $students = Students::get()
-            ->map(function ($student) {
-                $totalPoints = $student->transactions()->sum('points_earned');
-                $totalBottles = $student->transactions()->sum('bottle_qty');
-                
-                return [
-                    'student_id' => $student->student_id,
-                    'student_number' => $student->student_number,
-                    'first_name' => $student->first_name,
-                    'last_name' => $student->last_name,
-                    'grade_level' => $student->grade_level,
-                    'section' => $student->section,
-                    'points_balance' => $student->points_balance,
-                    'total_points' => $totalPoints,
-                    'total_bottles' => $totalBottles
-                ];
-            })
-            ->sortByDesc('total_points')
-            ->values()
-            ->map(function ($student, $index) {
-                $student['rank'] = $index + 1;
-                return $student;
-            });
-
-        return response()->json([
-            'ranking_type' => 'overall',
-            'ranking' => $students
-        ]);
-    }
-
-    /**
-     * GET api/sections/ranking
-     * Get ranking of sections by total points and bottles recycled
-     */
-    public function sectionRankingOverall()
-    {
-        // Get all sections first
-        $allSections = Section::pluck('name')->toArray();
-        
-        // Get all section stats in a single query
-        $sectionStats = DB::table('transactions')
-            ->join('students', 'transactions.student_id', '=', 'students.student_id')
-            ->whereIn('students.section', $allSections)
-            ->groupBy('students.section')
-            ->selectRaw('
-                students.section as section_name,
-                COUNT(DISTINCT students.student_id) as student_count,
-                SUM(transactions.points_earned) as total_points,
-                SUM(transactions.bottle_qty) as total_bottles
-            ')
-            ->get()
-            ->keyBy('section_name');
-
-        // Create array with all sections, including those with no transactions
-        $sections = collect($allSections)->map(function ($sectionName) use ($sectionStats) {
-            $stats = $sectionStats->get($sectionName);
             return [
-                'section_name' => $sectionName,
-                'student_count' => $stats->student_count ?? 0,
-                'total_points' => $stats->total_points ?? 0,
-                'total_bottles' => $stats->total_bottles ?? 0
+                'rank'=>$i+1,'student_id'=>$s->student_id,'student_number'=>$s->student_number,
+                'first_name'=>$s->first_name,'last_name'=>$s->last_name,
+                'grade_level'=>$s->gradeLevel?->name,'section'=>$section->name,
+                'points_balance'=>(int)$s->points_balance,'total_points'=>(int)($s->total_points??0),
+                'total_bottles'=>$totalBottles,
             ];
         });
+        return response()->json(['section'=>$section->name,'ranking'=>$ranking]);
+    }
 
-        // Sort by points first, then bottles
-        $sortedByPoints = $sections->sortByDesc('total_points')
-            ->values()
-            ->map(function ($section, $index) {
-                $section['points_rank'] = $index + 1;
-                return $section;
-            });
+    public function overallRanking()
+    {
+        $students=Students::with(['gradeLevel','section'])
+            ->withSum(['pointTransactions as total_points'=>fn($q)=>$q->where('transaction_type','earned')],'points')
+            ->get()->sortByDesc('total_points')->values()
+            ->map(fn($s,$i)=>[
+                'rank'=>$i+1,'student_id'=>$s->student_id,'student_number'=>$s->student_number,
+                'first_name'=>$s->first_name,'last_name'=>$s->last_name,
+                'grade_level'=>$s->gradeLevel?->name,'section'=>$s->section?->name,
+                'points_balance'=>(int)$s->points_balance,'total_points'=>(int)($s->total_points??0)
+            ]);
+        return response()->json(['ranking_type'=>'overall','ranking'=>$students]);
+    }
 
-        $sortedByBottles = $sections->sortByDesc('total_bottles')
-            ->values()
-            ->map(function ($section, $index) {
-                $section['bottles_rank'] = $index + 1;
-                return $section;
-            });
-
-        // Merge both rankings
-        $rankedSections = $sortedByPoints->map(function ($section) use ($sortedByBottles) {
-            $bottleRankItem = $sortedByBottles->firstWhere('section_name', $section['section_name']);
-            $section['bottles_rank'] = $bottleRankItem['bottles_rank'];
-            return $section;
+    public function sectionRankingOverall()
+    {
+        $sections=Section::withCount('students')->get()->map(function($section){
+            $studentIds=$section->students()->pluck('student_id');
+            $points=\App\Models\PointTransaction::whereIn('student_id',$studentIds)->where('transaction_type','earned')->sum('points');
+            $bottles=\App\Models\RecyclingItem::whereHas('transaction',fn($q)=>$q->whereIn('student_id',$studentIds))->count();
+            return ['section_id'=>$section->section_id,'section_name'=>$section->name,'student_count'=>$section->students_count,
+                'total_points'=>(int)$points,'total_bottles'=>$bottles];
         });
-
-        return response()->json([
-            'ranking_type' => 'sections',
-            'ranking' => $rankedSections
-        ]);
+        $byPoints=$sections->sortByDesc('total_points')->values()->map(fn($s,$i)=>$s+['points_rank'=>$i+1]);
+        $byBottles=$sections->sortByDesc('total_bottles')->values()->keyBy('section_id');
+        $result=$byPoints->map(function($s)use($byBottles){$s['bottles_rank']=$byBottles[$s['section_id']]['bottles_rank'];return $s;});
+        return response()->json(['ranking_type'=>'sections','ranking'=>$result]);
     }
 }

@@ -1,77 +1,71 @@
 <?php
-
 namespace App\Http\Controllers;
 
+use App\Models\SmartBin;
+use App\Models\Notification;
 use Illuminate\Http\Request;
-use App\Models\Machine;
 
 class MachineController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
     public function index()
     {
-        $machines = Machine::with('machineLogs', 'classificationHistories', 'recyclingSessions', 'transactions')->get();
-        return response()->json($machines);
+        return response()->json(SmartBin::with(['logs', 'transactions'])->get());
     }
 
-    /**
-     * Store a newly created resource in storage.
-     */
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'name' => 'required|string',
-            'location' => 'nullable|string',
-            'status' => 'string|default:online',
-            'current_weight_kg' => 'numeric|default:0',
-            'max_capacity_kg' => 'numeric|default:100',
+            'name' => 'required|string|max:255',
+            'location' => 'required|string|max:255',
+            'status' => 'nullable|in:online,offline,maintenance,full',
+            'current_distance_cm' => 'nullable|integer|min:0',
+            'current_fill_percentage' => 'nullable|integer|min:0|max:100',
+            'full_threshold_cm' => 'nullable|integer|min:80',
+            'empty_threshold_cm' => 'nullable|integer|min:0',
             'last_maintenance_at' => 'nullable|date',
-            'last_active_at' => 'nullable|date'
+            'last_active_at' => 'nullable|date',
         ]);
-
-        $machine = Machine::create($validated);
-        return response()->json($machine, 201);
+        $bin = SmartBin::create($validated);
+        return response()->json($bin, 201);
     }
 
-    /**
-     * Display the specified resource.
-     */
     public function show(string $id)
     {
-        $machine = Machine::with('machineLogs', 'classificationHistories', 'recyclingSessions', 'transactions')->findOrFail($id);
-        return response()->json($machine);
+        return response()->json(SmartBin::with(['logs', 'transactions'])->findOrFail($id));
     }
 
-    /**
-     * Update the specified resource in storage.
-     */
     public function update(Request $request, string $id)
     {
-        $machine = Machine::findOrFail($id);
+        $bin = SmartBin::findOrFail($id);
+        $oldPct = $bin->current_fill_percentage > 0 ? $bin->current_distance_cm / $bin->current_fill_percentage : 0;
         $validated = $request->validate([
-            'name' => 'string',
-            'location' => 'nullable|string',
-            'status' => 'string',
-            'current_weight_kg' => 'numeric',
-            'max_capacity_kg' => 'numeric',
-            'last_maintenance_at' => 'nullable|date',
-            'last_active_at' => 'nullable|date'
-        ]);
+            'name' => 'sometimes|string|max:255',
+            'location' => 'sometimes|string|max:255',
+            'status' => 'sometimes|in:online,offline,maintenance,full',
 
-        $machine->update($validated);
-        return response()->json($machine);
+            'last_maintenance_at' => 'nullable|date',
+            'last_active_at' => 'nullable|date',
+        ]);
+        $bin->update($validated);
+        $newPct = $bin->current_fill_percentage > 0 ? $bin->current_distance_cm / $bin->current_fill_percentage : 0;
+        if ($newPct >= 100 && $oldPct < 100) {
+            Notification::create([
+                'smart_bin_id' => $bin->smart_bin_id,
+                'notification_type' => 'machine_full',
+                'title' => 'Smart bin full',
+                'message' => "{$bin->name} at {$bin->location} has reached full capacity.",
+                'data' => ['capacity_percentage' => $newPct]
+            ]);
+        }
+        return response()->json($bin);
     }
 
-    /**
-     * Remove the specified resource from storage.
-     */
     public function destroy(string $id)
     {
-        $machine = Machine::findOrFail($id);
-        $machine->delete();
+        $bin = SmartBin::findOrFail($id);
+        if ($bin->transactions()->exists())
+            return response()->json(['error' => 'Smart bin has transaction history and cannot be deleted.'], 409);
+        $bin->delete();
         return response()->json(null, 204);
     }
 }
-

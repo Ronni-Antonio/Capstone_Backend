@@ -6,23 +6,21 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
         Schema::create('plastic_types', function (Blueprint $table) {
-            $table->bigIncrements('plastic_type_id')->primary();
-            $table->string('name'); // PET, HDPE, PVC, LDPE, PP, PS, Other
-            $table->integer('points_per_item')->nullable();
+            $table->id('plastic_type_id');
+            $table->string('code', 50)->unique(); // PET, INVALID, etc.
+            $table->string('name')->unique();
+            $table->unsignedInteger('points_value')->default(0);
+            $table->boolean('is_accepted')->default(false);
             $table->boolean('is_active')->default(true);
             $table->timestamps();
+
+            $table->index(['is_active', 'is_accepted']);
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
         Schema::dropIfExists('plastic_types');

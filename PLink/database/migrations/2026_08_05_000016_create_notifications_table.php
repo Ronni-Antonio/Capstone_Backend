@@ -6,29 +6,34 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
         Schema::create('notifications', function (Blueprint $table) {
-            $table->bigIncrements('notification_id')->primary();
-            $table->unsignedBigInteger('student_id')->nullable();
-            $table->string('notification_type'); // e.g., "points_earned", "reward_redeemed", "machine_full", "system_alert"
+            $table->id('notification_id');
+
+            $table->foreignId('student_id')
+                ->nullable()
+                ->constrained('students', 'student_id')
+                ->nullOnDelete();
+
+            $table->foreignId('smart_bin_id')
+                ->nullable()
+                ->constrained('smart_bins', 'smart_bin_id')
+                ->nullOnDelete();
+
+            $table->string('notification_type');
             $table->string('title');
             $table->text('message');
             $table->json('data')->nullable();
             $table->boolean('is_read')->default(false);
-            $table->datetime('read_at')->nullable();
+            $table->timestamp('read_at')->nullable();
             $table->timestamps();
 
-            $table->foreign('student_id')->references('student_id')->on('students')->onDelete('cascade');
+            $table->index(['student_id', 'is_read']);
+            $table->index(['smart_bin_id', 'created_at']);
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
         Schema::dropIfExists('notifications');

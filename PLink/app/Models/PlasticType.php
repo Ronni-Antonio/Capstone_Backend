@@ -1,5 +1,4 @@
 <?php
-
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
@@ -9,17 +8,11 @@ class PlasticType extends Model
 {
     protected $table = 'plastic_types';
     protected $primaryKey = 'plastic_type_id';
-    public $timestamps = true;
-    protected $fillable = [
-        'name',
-        'points_per_item',
-        'multiplier',
-        'is_active'
-    ];
+    protected $fillable = ['code','name','points_value','is_accepted','is_active'];
+    protected $casts = ['points_value'=>'integer','is_accepted'=>'boolean','is_active'=>'boolean'];
 
-    // A plastic type has many classification histories
-    public function classificationHistories(): HasMany
+    public function classifications(): HasMany
     {
-        return $this->hasMany(ClassificationHistory::class, 'plastic_type_id', 'plastic_type_id');
+        return $this->hasMany(AiClassification::class, 'plastic_type_id', 'plastic_type_id');
     }
 }

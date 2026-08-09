@@ -1,202 +1,243 @@
 <?php
-
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
-use App\Models\Transactions;
-use App\Models\Students;
+use App\Models\RecyclingTransaction;
+use App\Models\RecyclingItem;
+use App\Models\AiClassification;
+use App\Models\AiModel;
 use App\Models\PlasticType;
-use App\Models\systemSettings;
-use App\Models\ClassificationHistory;
+use App\Models\Students;
+use App\Models\RfidCard;
+use App\Models\SmartBin;
+use App\Models\PointTransaction;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class TransactionController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
     public function index()
     {
-        $transactions = Transactions::with(['student', 'machine', 'classificationHistories.plasticType'])->get();
-        return response()->json($transactions);
+        return response()->json(
+            RecyclingTransaction::with([
+                'student.gradeLevel','student.section','rfidCard',
+                'smartBin','items.classification.plasticType','items.classification.model'
+            ])->latest()->get()
+        );
     }
 
-    /**
-     * Show the form for creating a new resource.
-     */
-    public function create()
+    public function show(string $id)
     {
-        //
+        $tx=RecyclingTransaction::with([
+            'student.gradeLevel','student.section','rfidCard',
+            'smartBin','items.classification.plasticType','items.classification.model'
+        ])->findOrFail($id);
+        return response()->json($tx);
     }
 
     /**
-     * Process a detailed transaction with classification data
+     * Start a transaction when the ESP32-CAM begins a recycling event.
+     * Student is intentionally unknown until RFID is tapped.
+     */
+    public function start(Request $request)
+    {
+        $validated=$request->validate([
+            'smart_bin_id'=>'required|exists:smart_bins,smart_bin_id',
+        ]);
+        $tx=RecyclingTransaction::create([
+            'smart_bin_id'=>$validated['smart_bin_id'],
+            'transaction_code'=>(string)Str::uuid(),
+            'status'=>'classifying',
+            'started_at'=>now(),
+        ]);
+        SmartBin::whereKey($validated['smart_bin_id'])->update(['last_active_at'=>now()]);
+        return response()->json(['success'=>true,'transaction'=>$tx],201);
+    }
+
+    /**
+     * CNN service sends one or more classified bottles before RFID.
+     */
+    public function addClassification(Request $request,string $transactionCode)
+    {
+        $validated=$request->validate([
+            'item_number'=>'required|integer|min:1',
+            'image_path'=>'nullable|string|max:255',
+            'weight_kg'=>'nullable|numeric|min:0',
+            'plastic_type_id'=>'nullable|exists:plastic_types,plastic_type_id',
+            'model_id'=>'nullable|exists:ai_models,model_id',
+            'model_name'=>'nullable|string|max:255',
+            'model_version'=>'nullable|string|max:100',
+            'confidence_score'=>'nullable|numeric|min:0|max:100',
+            'status'=>'required|in:valid,invalid,uncertain,rejected,manually_verified',
+            'notes'=>'nullable|string',
+        ]);
+
+        $tx=RecyclingTransaction::where('transaction_code',$transactionCode)->firstOrFail();
+        if(in_array($tx->status,['completed','cancelled','rejected'],true)){
+            return response()->json(['error'=>'Transaction is already closed.'],409);
+        }
+
+        $item=DB::transaction(function() use($tx,$validated){
+            $item=RecyclingItem::updateOrCreate(
+                ['transaction_id'=>$tx->transaction_id,'item_number'=>$validated['item_number']],
+                [
+                    'image_path'=>$validated['image_path']??null,
+                    'weight_kg'=>$validated['weight_kg']??null,
+                    'status'=>$validated['status']==='valid'?'accepted':$validated['status'],
+                ]
+            );
+
+            $modelId=$validated['model_id']??null;
+            if(!$modelId && !empty($validated['model_name']) && !empty($validated['model_version'])){
+                $model=AiModel::firstOrCreate(
+                    ['name'=>$validated['model_name'],'version'=>$validated['model_version']],
+                    ['framework'=>'TensorFlow/Keras','is_active'=>true]
+                );
+                $modelId=$model->model_id;
+            }
+
+            AiClassification::updateOrCreate(
+                ['recycling_item_id'=>$item->recycling_item_id],
+                [
+                    'plastic_type_id'=>$validated['plastic_type_id']??null,
+                    'model_id'=>$modelId,
+                    'confidence_score'=>$validated['confidence_score']??null,
+                    'status'=>$validated['status'],
+                    'notes'=>$validated['notes']??null,
+                    'is_verified'=>$validated['status']==='manually_verified',
+                    'classified_at'=>now(),
+                ]
+            );
+
+            $tx->update([
+                'status'=>'waiting_for_rfid',
+                'total_items'=>$tx->items()->count(),
+                'total_weight_kg'=>$tx->items()->sum('weight_kg'),
+            ]);
+            return $item;
+        });
+
+        return response()->json([
+            'success'=>true,
+            'transaction_code'=>$tx->transaction_code,
+            'item'=>$item->load('classification.plasticType','classification.model')
+        ],201);
+    }
+
+    /**
+     * RFID reader identifies the student and completes the transaction.
+     * Points are calculated by Laravel, not by the CNN.
+     */
+    public function completeWithRfid(Request $request,string $transactionCode)
+    {
+        $validated=$request->validate(['card_uid'=>'required|string|max:100']);
+
+        $result=DB::transaction(function() use($transactionCode,$validated){
+            $tx=RecyclingTransaction::with('items.classification.plasticType')
+                ->where('transaction_code',$transactionCode)->lockForUpdate()->firstOrFail();
+
+            if($tx->status==='completed'){
+                return ['already_completed'=>true,'transaction'=>$tx->load('student','rfidCard')];
+            }
+
+            $card=RfidCard::with('student')->where('card_uid',strtoupper(trim($validated['card_uid'])))
+                ->where('status','active')->lockForUpdate()->first();
+
+            if(!$card) throw new \RuntimeException('Unrecognized or inactive RFID card.');
+
+            $student=Students::lockForUpdate()->findOrFail($card->student_id);
+            $items=$tx->items()->with('classification.plasticType')->get();
+
+            $totalPoints=0;
+            foreach($items as $item){
+                $classification=$item->classification;
+                if(!$classification || $classification->status!=='valid') continue;
+                $type=$classification->plasticType;
+                if($type && $type->is_accepted) $totalPoints += (int)$type->points_value;
+            }
+
+            $tx->update([
+                'student_id'=>$student->student_id,
+                'rfid_card_id'=>$card->rfid_card_id,
+                'total_items'=>$items->count(),
+                'total_points'=>$totalPoints,
+                'total_weight_kg'=>$items->sum('weight_kg'),
+                'status'=>'completed',
+                'completed_at'=>now(),
+            ]);
+
+            if($totalPoints!==0){
+                PointTransaction::create([
+                    'student_id'=>$student->student_id,
+                    'recycling_transaction_id'=>$tx->transaction_id,
+                    'points'=>$totalPoints,
+                    'transaction_type'=>'earned',
+                    'description'=>'Points earned from recycling transaction '.$tx->transaction_code,
+                ]);
+                $student->increment('points_balance',$totalPoints);
+            }
+
+            return ['already_completed'=>false,'transaction'=>$tx->load('student','rfidCard','smartBin','items.classification.plasticType')];
+        });
+
+        return response()->json(['success'=>true]+$result,200);
+    }
+
+    /**
+     * Backward-compatible endpoint for React. Prefer start + addClassification + completeWithRfid.
+     * This accepts a full classification payload but still keeps student association through RFID when supplied.
      */
     public function processTransaction(Request $request)
     {
-        try {
-            // Validate incoming request
-            $validated = $request->validate([
-                'student_id' => 'required|exists:students,student_id',
-                'machine_id' => 'nullable|exists:machines,machine_id',
-                'bottles' => 'required|array|min:1',
-                'bottles.*.plastic_type_id' => 'nullable|exists:plastic_types,plastic_type_id',
-                'bottles.*.status' => 'required|in:valid,contaminated,non_pet,rejected,invalid',
-                'bottles.*.confidence_score' => 'nullable|numeric|min:0|max:100',
-                'bottles.*.image_path' => 'nullable|string',
-                'bottles.*.ai_model_version' => 'nullable|string',
-                'bottles.*.notes' => 'nullable|string'
-            ]);
+        $validated=$request->validate([
+            'student_id'=>'nullable|exists:students,student_id',
+            'card_uid'=>'nullable|string|max:100',
+            'smart_bin_id'=>'required|exists:smart_bins,smart_bin_id',
+            'bottles'=>'required|array|min:1',
+            'bottles.*.item_number'=>'nullable|integer|min:1',
+            'bottles.*.plastic_type_id'=>'nullable|exists:plastic_types,plastic_type_id',
+            'bottles.*.status'=>'required|in:valid,invalid,uncertain,rejected,manually_verified',
+            'bottles.*.confidence_score'=>'nullable|numeric|min:0|max:100',
+            'bottles.*.image_path'=>'nullable|string',
+            'bottles.*.weight_kg'=>'nullable|numeric|min:0',
+            'bottles.*.model_id'=>'nullable|exists:ai_models,model_id',
+            'bottles.*.model_name'=>'nullable|string',
+            'bottles.*.model_version'=>'nullable|string',
+            'bottles.*.notes'=>'nullable|string',
+        ]);
 
-            $settings = systemSettings::first();
-            if (!$settings) {
-                return response()->json(['error' => 'System settings not found'], 400);
-            }
+        $tx=$this->start(new Request(['smart_bin_id'=>$validated['smart_bin_id']]))->getData(true);
+        $code=$tx['transaction']['transaction_code'];
 
-            // Calculate transaction totals
-            $totalBottles = count($validated['bottles']);
-            $validQty = 0;
-            $contaminatedQty = 0;
-            $nonPetQty = 0;
-            $rejectedQty = 0;
-            $totalPointsEarned = 0;
-            $breakdown = [];
-
-            // Start DB transaction
-            DB::beginTransaction();
-
-            // Create the main transaction record
-            $transaction = Transactions::create([
-                'student_id' => $validated['student_id'],
-                'machine_id' => $validated['machine_id'] ?? null,
-                'bottle_qty' => $totalBottles,
-                'valid_qty' => 0, // We'll update this as we process bottles
-                'contaminated_qty' => 0,
-                'non_pet_qty' => 0,
-                'rejected_qty' => 0,
-                'points_earned' => 0,
-                'transaction_date' => now(),
-                'breakdown' => []
-            ]);
-
-            // Process each bottle
-            foreach ($validated['bottles'] as $bottleData) {
-                // Get plastic type points if available
-                $plasticType = null;
-                $pointsChange = 0;
-
-                if (!empty($bottleData['plastic_type_id'])) {
-                    $plasticType = PlasticType::find($bottleData['plastic_type_id']);
-                }
-
-                // Determine points change based on status
-                switch ($bottleData['status']) {
-                    case 'valid':
-                        $validQty++;
-                        $pointsChange = $plasticType ? $plasticType->points_per_item : $settings->point_conversion;
-                        break;
-                    case 'contaminated':
-                        $contaminatedQty++;
-                        $pointsChange = $settings->penalty_rejected;
-                        break;
-                    case 'non_pet':
-                        $nonPetQty++;
-                        $pointsChange = $settings->penalty_non_pet;
-                        break;
-                    case 'rejected':
-                    case 'invalid':
-                        $rejectedQty++;
-                        $pointsChange = $settings->penalty_invalid;
-                        break;
-                }
-
-                $totalPointsEarned += $pointsChange;
-
-                // Add to breakdown
-                $breakdown[] = [
-                    'plastic_type_id' => $bottleData['plastic_type_id'],
-                    'plastic_type_name' => $plasticType ? $plasticType->name : 'Unknown',
-                    'status' => $bottleData['status'],
-                    'points_change' => $pointsChange,
-                    'confidence_score' => $bottleData['confidence_score'] ?? null
-                ];
-
-                // Create classification history entry
-                ClassificationHistory::create([
-                    'plastic_type_id' => $bottleData['plastic_type_id'],
-                    'machine_id' => $validated['machine_id'] ?? null,
-                    'transaction_id' => $transaction->transaction_id,
-                    'confidence_score' => $bottleData['confidence_score'] ?? null,
-                    'image_path' => $bottleData['image_path'] ?? null,
-                    'ai_model_version' => $bottleData['ai_model_version'] ?? null,
-                    'notes' => $bottleData['notes'] ?? null,
-                    'is_verified' => false,
-                    'status' => $bottleData['status'],
-                    'points_change' => $pointsChange
-                ]);
-            }
-
-            // Update transaction with final totals
-            $transaction->update([
-                'valid_qty' => $validQty,
-                'contaminated_qty' => $contaminatedQty,
-                'non_pet_qty' => $nonPetQty,
-                'rejected_qty' => $rejectedQty,
-                'points_earned' => $totalPointsEarned,
-                'breakdown' => $breakdown
-            ]);
-
-            // Update student's points balance
-            $student = Students::find($validated['student_id']);
-            $student->points_balance += $totalPointsEarned;
-            $student->save();
-
-            // Commit DB transaction
-            DB::commit();
-
-            // Load relationships for response
-            $transaction->load(['student', 'machine', 'classificationHistories.plasticType']);
-
-            return response()->json($transaction, 201);
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json([
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ], 500);
+        foreach($validated['bottles'] as $i=>$bottle){
+            $payload=$bottle;
+            $payload['item_number']=$bottle['item_number']??($i+1);
+            $this->addClassification(new Request($payload),$code);
         }
+
+        if(!empty($validated['card_uid'])){
+            return $this->completeWithRfid(new Request(['card_uid'=>$validated['card_uid']]),$code);
+        }
+
+        if(!empty($validated['student_id'])){
+            // Explicit student_id is accepted only for trusted/admin use.
+            $student=Students::findOrFail($validated['student_id']);
+            $card=$student->rfidCards()->where('status','active')->first();
+            if(!$card) return response()->json(['success'=>true,'message'=>'Classification saved; waiting for RFID.','transaction_code'=>$code],201);
+            return $this->completeWithRfid(new Request(['card_uid'=>$card->card_uid]),$code);
+        }
+
+        return response()->json([
+            'success'=>true,'message'=>'Classification saved; waiting for RFID.',
+            'transaction_code'=>$code
+        ],201);
     }
 
-    /**
-     * Display the specified resource.
-     */
-    public function show(string $id)
-    {
-        $transaction = Transactions::with(['student', 'machine', 'classificationHistories.plasticType'])->findOrFail($id);
-        return response()->json($transaction);
-    }
-
-    /**
-     * Show the form for editing the specified resource.
-     */
-    public function edit(string $id)
-    {
-        //
-    }
-
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, string $id)
-    {
-        //
-    }
-
-    /**
-     * Remove the specified resource from storage.
-     */
     public function destroy(string $id)
     {
-        //
+        $tx=RecyclingTransaction::findOrFail($id);
+        if($tx->status==='completed') return response()->json(['error'=>'Completed transactions cannot be deleted.'],409);
+        $tx->delete();
+        return response()->json(null,204);
     }
 }

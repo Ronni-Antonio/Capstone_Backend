@@ -4,14 +4,14 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-class Section extends Model
+class GradeLevel extends Model
 {
-    protected $table = 'sections';
-    protected $primaryKey = 'section_id';
+    protected $table = 'grade_levels';
+    protected $primaryKey = 'grade_level_id';
     protected $fillable = ['name'];
 
     public function students(): HasMany
     {
-        return $this->hasMany(Students::class, 'section_id', 'section_id');
+        return $this->hasMany(Students::class, 'grade_level_id', 'grade_level_id');
     }
 }

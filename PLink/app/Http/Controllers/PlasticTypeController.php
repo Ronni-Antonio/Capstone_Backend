@@ -1,97 +1,43 @@
 <?php
-
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
 use App\Models\PlasticType;
-use App\Models\systemSettings;
+use Illuminate\Http\Request;
 
 class PlasticTypeController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
-    public function index()
-    {
-        $plasticType = PlasticType::all();
-        return response()->json($plasticType);
+    public function index(){ return response()->json(PlasticType::orderBy('name')->get()); }
 
-    }
-
-    /**
-     * Show the form for creating a new resource.
-     */
-    public function create()
-    {
-        //
-    }
-
-    /**
-     * Store a newly created resource in storage.
-     */
     public function store(Request $request)
     {
-        $validated = $request->validate([
-            'name' => 'required|string',
-            'multiplier' => 'required|numeric|min:0',
-            'is_active' => 'boolean',
+        $v=$request->validate([
+            'code'=>'required|string|max:50|unique:plastic_types,code',
+            'name'=>'required|string|max:255|unique:plastic_types,name',
+            'points_value'=>'required|integer|min:0',
+            'is_accepted'=>'boolean',
+            'is_active'=>'boolean',
         ]);
-
-        // Calculate points_per_item based on system settings
-        $settings = systemSettings::first();
-        $pointConversion = $settings ? $settings->point_conversion : 5;
-        $validated['points_per_item'] = (int) round($pointConversion * $validated['multiplier']);
-
-        $plasticType = PlasticType::create($validated);
-        return response()->json($plasticType, 201);
+        return response()->json(PlasticType::create($v),201);
     }
 
-    /**
-     * Display the specified resource.
-     */
-    public function show(string $id)
-    {
-        //
-    }
+    public function show(string $id){ return response()->json(PlasticType::findOrFail($id)); }
 
-    /**
-     * Show the form for editing the specified resource.
-     */
-    public function edit(string $id)
+    public function update(Request $request,string $id)
     {
-        //
-    }
-
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, string $id)
-    {
-        $plasticType = PlasticType::findOrFail($id);
-        $validated = $request->validate([
-            'name' => 'string',
-            'multiplier' => 'numeric|min:0',
-            'is_active' => 'boolean',
+        $type=PlasticType::findOrFail($id);
+        $v=$request->validate([
+            'code'=>'sometimes|string|max:50|unique:plastic_types,code,'.$type->plastic_type_id.',plastic_type_id',
+            'name'=>'sometimes|string|max:255|unique:plastic_types,name,'.$type->plastic_type_id.',plastic_type_id',
+            'points_value'=>'sometimes|integer|min:0',
+            'is_accepted'=>'sometimes|boolean','is_active'=>'sometimes|boolean'
         ]);
-
-        // If multiplier changed, recalculate points_per_item
-        if (isset($validated['multiplier'])) {
-            $settings = systemSettings::first();
-            $pointConversion = $settings ? $settings->point_conversion : 5;
-            $validated['points_per_item'] = (int) round($pointConversion * $validated['multiplier']);
-        }
-
-        $plasticType->update($validated);
-        return response()->json($plasticType);
+        $type->update($v); return response()->json($type);
     }
 
-    /**
-     * Remove the specified resource from storage.
-     */
     public function destroy(string $id)
     {
-        $plasticType = PlasticType::findOrFail($id);
-        $plasticType->delete();
-        return response()->json(null, 204);
+        $type=PlasticType::findOrFail($id);
+        if($type->classifications()->exists()) return response()->json(['error'=>'Plastic type has classification history. Deactivate it instead.'],409);
+        $type->delete(); return response()->json(null,204);
     }
 }
