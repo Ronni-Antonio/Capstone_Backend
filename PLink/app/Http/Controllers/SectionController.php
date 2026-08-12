@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 use App\Models\Section;
 use App\Models\Students;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class SectionController extends Controller
 {
@@ -79,16 +80,56 @@ class SectionController extends Controller
 
     public function sectionRankingOverall()
     {
-        $sections=Section::withCount('students')->get()->map(function($section){
-            $studentIds=$section->students()->pluck('student_id');
-            $points=\App\Models\PointTransaction::whereIn('student_id',$studentIds)->where('transaction_type','earned')->sum('points');
-            $bottles=\App\Models\RecyclingItem::whereHas('transaction',fn($q)=>$q->whereIn('student_id',$studentIds))->count();
-            return ['section_id'=>$section->section_id,'section_name'=>$section->name,'student_count'=>$section->students_count,
-                'total_points'=>(int)$points,'total_bottles'=>$bottles];
+        $studentCounts = DB::table('students')
+            ->select('section_id')
+            ->selectRaw('COUNT(*) as student_count')
+            ->groupBy('section_id');
+
+        $pointTotals = DB::table('point_transactions')
+            ->join('students', 'students.student_id', '=', 'point_transactions.student_id')
+            ->where('point_transactions.transaction_type', 'earned')
+            ->select('students.section_id')
+            ->selectRaw('SUM(point_transactions.points) as total_points')
+            ->groupBy('students.section_id');
+
+        $itemTotals = DB::table('recycling_transactions')
+            ->join('students', 'students.student_id', '=', 'recycling_transactions.student_id')
+            ->where('recycling_transactions.status', 'completed')
+            ->select('students.section_id')
+            ->selectRaw('SUM(recycling_transactions.total_items) as total_bottles')
+            ->groupBy('students.section_id');
+
+        $sections = DB::table('sections')
+            ->leftJoinSub($studentCounts, 'student_counts', fn ($join) =>
+                $join->on('sections.section_id', '=', 'student_counts.section_id'))
+            ->leftJoinSub($pointTotals, 'point_totals', fn ($join) =>
+                $join->on('sections.section_id', '=', 'point_totals.section_id'))
+            ->leftJoinSub($itemTotals, 'item_totals', fn ($join) =>
+                $join->on('sections.section_id', '=', 'item_totals.section_id'))
+            ->select('sections.section_id', 'sections.name as section_name')
+            ->selectRaw('COALESCE(student_counts.student_count, 0) as student_count')
+            ->selectRaw('COALESCE(point_totals.total_points, 0) as total_points')
+            ->selectRaw('COALESCE(item_totals.total_bottles, 0) as total_bottles')
+            ->get();
+
+        $pointsRanks = $sections->sortByDesc('total_points')->values();
+        $bottlesRanks = $sections->sortByDesc('total_bottles')->values();
+        $bottleRankById = $bottlesRanks->mapWithKeys(
+            fn ($row, $index) => [$row->section_id => $index + 1]
+        );
+
+        $ranking = $pointsRanks->map(function ($row, $index) use ($bottleRankById) {
+            return [
+                'section_id' => $row->section_id,
+                'section_name' => $row->section_name,
+                'student_count' => (int) $row->student_count,
+                'total_points' => (int) $row->total_points,
+                'total_bottles' => (int) $row->total_bottles,
+                'points_rank' => $index + 1,
+                'bottles_rank' => (int) $bottleRankById[$row->section_id],
+            ];
         });
-        $byPoints=$sections->sortByDesc('total_points')->values()->map(fn($s,$i)=>$s+['points_rank'=>$i+1]);
-        $byBottles=$sections->sortByDesc('total_bottles')->values()->keyBy('section_id');
-        $result=$byPoints->map(function($s)use($byBottles){$s['bottles_rank']=$byBottles[$s['section_id']]['bottles_rank'];return $s;});
-        return response()->json(['ranking_type'=>'sections','ranking'=>$result]);
+
+        return response()->json(['ranking_type' => 'sections', 'ranking' => $ranking]);
     }
 }

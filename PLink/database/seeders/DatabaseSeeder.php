@@ -302,7 +302,6 @@ class DatabaseSeeder extends Seeder
         /*
         |--------------------------------------------------------------------------
         | 10. RFID CARDS
-
                 foreach ($students as $index => $student) {
             RfidCard::updateOrCreate(
                 ['student_id' => $student->student_id],

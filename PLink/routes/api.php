@@ -19,11 +19,15 @@ use App\Http\Controllers\AnalyticsReportController;
 use App\Http\Controllers\ClassificationController;
 use App\Http\Controllers\AiModelController;
 use App\Http\Controllers\PredictionController;
+use App\Http\Controllers\DashboardController;
 
 Route::get('/user', fn(Request $request)=>$request->user())->middleware('auth:sanctum');
 
 Route::post('auth/login',[AuthController::class,'login']);
 Route::post('auth/logout',[AuthController::class,'logout'])->middleware('auth:sanctum');
+
+// Lightweight initial dashboard payload.
+Route::get('dashboard',[DashboardController::class,'index']);
 Route::post('auth/forgot-password/send-otp',[\App\Http\Controllers\ForgotPasswordController::class,'sendOtp']);
 Route::post('auth/forgot-password/verify-otp',[\App\Http\Controllers\ForgotPasswordController::class,'verifyOtp']);
 Route::post('auth/forgot-password/reset',[\App\Http\Controllers\ForgotPasswordController::class,'resetPassword']);

@@ -14,9 +14,25 @@ class StudentController extends Controller
 {
     public function index()
     {
-        return response()->json(
-            Students::with(['gradeLevel','section','rfidCards'])->latest()->get()
-        );
+        $students = Students::query()
+            ->select([
+                'student_id','student_number','first_name','last_name',
+                'grade_level_id','section_id','status','points_balance','created_at'
+            ])
+            ->with([
+                'gradeLevel:grade_level_id,name',
+                'section:section_id,name',
+                'rfidCards' => fn ($q) => $q
+                    ->where('status','active')
+                    ->select('rfid_card_id','student_id','card_uid','status','assigned_at'),
+            ])
+            ->withSum([
+                'transactions as total_items_recycled' => fn ($q) => $q->where('status','completed')
+            ], 'total_items')
+            ->latest('student_id')
+            ->get();
+
+        return response()->json($students);
     }
 
     public function store(Request $request)

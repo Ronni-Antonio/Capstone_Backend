@@ -16,13 +16,33 @@ use Illuminate\Support\Str;
 
 class TransactionController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
+        // List screens only need transaction totals and student identity.
+        // Full item/classification relationships remain available from show().
+        if ($request->boolean('summary', true)) {
+            return response()->json(
+                RecyclingTransaction::query()
+                    ->select([
+                        'transaction_id','transaction_code','student_id','smart_bin_id',
+                        'status','total_items','total_points','started_at','completed_at','created_at'
+                    ])
+                    ->with([
+                        'student:student_id,first_name,last_name,grade_level_id,section_id',
+                        'student.section:section_id,name',
+                        'smartBin:smart_bin_id,name,location',
+                    ])
+                    ->latest('started_at')
+                    ->limit(500)
+                    ->get()
+            );
+        }
+
         return response()->json(
             RecyclingTransaction::with([
                 'student.gradeLevel','student.section','rfidCard',
                 'smartBin','items.classification.plasticType','items.classification.model'
-            ])->latest()->get()
+            ])->latest('started_at')->paginate(50)
         );
     }
 
@@ -112,7 +132,6 @@ class TransactionController extends Controller
             $tx->update([
                 'status'=>'waiting_for_rfid',
                 'total_items'=>$tx->items()->count(),
-                'total_weight_kg'=>$tx->items()->sum('weight_kg'),
             ]);
             return $item;
         });
@@ -161,7 +180,6 @@ class TransactionController extends Controller
                 'rfid_card_id'=>$card->rfid_card_id,
                 'total_items'=>$items->count(),
                 'total_points'=>$totalPoints,
-                'total_weight_kg'=>$items->sum('weight_kg'),
                 'status'=>'completed',
                 'completed_at'=>now(),
             ]);
