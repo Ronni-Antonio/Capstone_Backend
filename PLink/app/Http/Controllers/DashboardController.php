@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Http\Controllers;
 
 use App\Models\RecyclingTransaction;
@@ -12,19 +13,35 @@ class DashboardController extends Controller
     public function index()
     {
         // Keep the dashboard fast while still allowing near-real-time updates.
-        $payload = Cache::remember('dashboard.summary.v3', 15, function () {
+        $payload = Cache::remember('dashboard.summary.v4', 15, function () {
+
+ 
+
             $totalStudents = Students::count();
+
             $activeStudents = Students::where('status', 'active')->count();
 
-            $completed = RecyclingTransaction::query()->where('status', 'completed');
+            $completed = RecyclingTransaction::query()
+                ->where('status', 'completed');
+
             $totalItems = (int) (clone $completed)->sum('total_items');
+
             $totalPoints = (int) (clone $completed)->sum('total_points');
 
             $grade3Participants = Students::query()
-                ->whereHas('gradeLevel', fn ($q) => $q->where('name', 'Grade 3'))
+                ->whereHas(
+                    'gradeLevel',
+                    fn ($q) => $q->where('name', 'Grade 3')
+                )
                 ->count();
 
-            $weekStart = now()->subDays(6)->startOfDay();
+
+
+            $weekStart = now()
+                ->subDays(6)
+                ->startOfDay();
+
+
 
             $dailyRecycling = RecyclingTransaction::query()
                 ->where('status', 'completed')
@@ -41,84 +58,235 @@ class DashboardController extends Controller
                     'points' => (int) $row->points,
                 ]);
 
+
+
+            $userRanking = RecyclingTransaction::query()
+                ->where('recycling_transactions.status', 'completed')
+                ->join(
+                    'students',
+                    'students.student_id',
+                    '=',
+                    'recycling_transactions.student_id'
+                )
+                ->select(
+                    'students.student_id',
+                    'students.first_name',
+                    'students.last_name'
+                )
+                ->selectRaw(
+                    'SUM(recycling_transactions.total_items) as total_items'
+                )
+                ->selectRaw(
+                    'SUM(recycling_transactions.total_points) as total_points'
+                )
+                ->groupBy(
+                    'students.student_id',
+                    'students.first_name',
+                    'students.last_name'
+                )
+                ->orderByDesc('total_points')
+                ->orderByDesc('total_items')
+                ->limit(10)
+                ->get()
+                ->values()
+                ->map(function ($student, $index) {
+
+                    return [
+                        'rank' => $index + 1,
+
+                        'student_id' => $student->student_id,
+
+                        'student_name' => trim(
+                            ($student->first_name ?? '') .
+                            ' ' .
+                            ($student->last_name ?? '')
+                        ) ?: 'Unknown Student',
+
+                        'total_items' => (int) $student->total_items,
+
+                        'total_points' => (int) $student->total_points,
+                    ];
+                });
+
+
             $recentActivity = RecyclingTransaction::query()
                 ->where('status', 'completed')
                 ->with('student:student_id,first_name,last_name')
                 ->latest('completed_at')
                 ->limit(5)
                 ->get([
-                    'transaction_id', 'student_id', 'total_items',
-                    'total_points', 'completed_at',
+                    'transaction_id',
+                    'student_id',
+                    'total_items',
+                    'total_points',
+                    'completed_at',
                 ])
                 ->map(fn ($tx) => [
+
                     'transaction_id' => $tx->transaction_id,
+
                     'student_id' => $tx->student_id,
-                    'student_name' => trim(($tx->student?->first_name ?? '') . ' ' . ($tx->student?->last_name ?? '')) ?: 'Unknown Student',
+
+                    'student_name' => trim(
+                        ($tx->student?->first_name ?? '') .
+                        ' ' .
+                        ($tx->student?->last_name ?? '')
+                    ) ?: 'Unknown Student',
+
                     'total_items' => (int) $tx->total_items,
+
                     'total_points' => (int) $tx->total_points,
-                    'completed_at' => optional($tx->completed_at)->toISOString(),
+
+                    'completed_at' => optional(
+                        $tx->completed_at
+                    )->toISOString(),
+
                 ]);
 
-            /*
-             * Weekly bottle collection for EVERY section.
-             *
-             * The previous optimized endpoint returned only the top section, which
-             * is why the dashboard chart showed one bar. This LEFT JOIN starts from
-             * sections so even a section with zero activity this week is returned.
-             */
+
             $weeklySectionActivity = RecyclingTransaction::query()
-                ->join('students', 'students.student_id', '=', 'recycling_transactions.student_id')
-                ->where('recycling_transactions.status', 'completed')
-                ->where('recycling_transactions.started_at', '>=', $weekStart)
+                ->join(
+                    'students',
+                    'students.student_id',
+                    '=',
+                    'recycling_transactions.student_id'
+                )
+                ->where(
+                    'recycling_transactions.status',
+                    'completed'
+                )
+                ->where(
+                    'recycling_transactions.started_at',
+                    '>=',
+                    $weekStart
+                )
                 ->select('students.section_id')
-                ->selectRaw('SUM(recycling_transactions.total_items) as total_items')
-                ->selectRaw('SUM(recycling_transactions.total_points) as total_points')
+                ->selectRaw(
+                    'SUM(recycling_transactions.total_items) as total_items'
+                )
+                ->selectRaw(
+                    'SUM(recycling_transactions.total_points) as total_points'
+                )
                 ->groupBy('students.section_id');
 
+
             $sectionStats = DB::table('sections')
-                ->leftJoinSub($weeklySectionActivity, 'weekly_activity', function ($join) {
-                    $join->on('sections.section_id', '=', 'weekly_activity.section_id');
-                })
-                ->select('sections.section_id', 'sections.name')
-                ->selectRaw('COALESCE(weekly_activity.total_items, 0) as total_items')
-                ->selectRaw('COALESCE(weekly_activity.total_points, 0) as total_points')
+                ->leftJoinSub(
+                    $weeklySectionActivity,
+                    'weekly_activity',
+                    function ($join) {
+
+                        $join->on(
+                            'sections.section_id',
+                            '=',
+                            'weekly_activity.section_id'
+                        );
+
+                    }
+                )
+                ->select(
+                    'sections.section_id',
+                    'sections.name'
+                )
+                ->selectRaw(
+                    'COALESCE(weekly_activity.total_items, 0) as total_items'
+                )
+                ->selectRaw(
+                    'COALESCE(weekly_activity.total_points, 0) as total_points'
+                )
                 ->orderBy('sections.name')
                 ->get()
                 ->map(fn ($row) => [
+
                     'section_id' => (int) $row->section_id,
+
                     'name' => $row->name,
+
                     'total_items' => (int) $row->total_items,
+
                     'total_points' => (int) $row->total_points,
+
                 ]);
+
 
             $topSection = $sectionStats
                 ->sortByDesc('total_items')
                 ->first();
 
+
             $smartBin = SmartBin::query()
                 ->select([
-                    'smart_bin_id', 'name', 'location', 'status',
-                    'current_distance_cm', 'current_fill_percentage',
-                    'full_threshold_cm', 'empty_threshold_cm', 'last_active_at',
+                    'smart_bin_id',
+                    'name',
+                    'location',
+                    'status',
+                    'current_distance_cm',
+                    'current_fill_percentage',
+                    'full_threshold_cm',
+                    'empty_threshold_cm',
+                    'last_active_at',
                 ])
                 ->first();
 
+
+
+            $wasteCategories = [];
+
+            $rewardHistory = [];
+
+
+
             return [
+
+                /*
+                 * Summary cards
+                 */
                 'summary' => [
+
                     'total_students' => $totalStudents,
+
                     'active_students' => $activeStudents,
-                    'inactive_students' => max(0, $totalStudents - $activeStudents),
+
+                    'inactive_students' => max(
+                        0,
+                        $totalStudents - $activeStudents
+                    ),
+
                     'total_items' => $totalItems,
+
                     'total_points' => $totalPoints,
+
                     'grade_3_participants' => $grade3Participants,
+
                 ],
+
+
                 'smart_bin' => $smartBin,
+
+
                 'section_stats' => $sectionStats->values(),
+
+
                 'top_section' => $topSection ?: null,
+
+
                 'daily_recycling' => $dailyRecycling,
+
+
+                'user_ranking' => $userRanking,
+
+
                 'recent_activity' => $recentActivity,
+
+
+                'waste_categories' => $wasteCategories,
+
+
+                'reward_history' => $rewardHistory,
+
             ];
         });
+
 
         return response()->json($payload);
     }
