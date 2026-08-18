@@ -4,8 +4,7 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
-return new class extends Migration
-{
+return new class extends Migration {
     public function up(): void
     {
         Schema::create('ai_classifications', function (Blueprint $table) {
@@ -15,9 +14,9 @@ return new class extends Migration
                 ->constrained('recycling_items', 'recycling_item_id')
                 ->cascadeOnDelete();
 
-            $table->foreignId('plastic_type_id')
+            $table->foreignId('recyclable_type_id')
                 ->nullable()
-                ->constrained('plastic_types', 'plastic_type_id')
+                ->constrained('recyclable_types', 'recyclable_type_id')
                 ->nullOnDelete();
 
             $table->foreignId('model_id')
@@ -34,7 +33,7 @@ return new class extends Migration
             $table->timestamp('classified_at')->nullable();
             $table->timestamps();
 
-            $table->index(['plastic_type_id', 'created_at']);
+            $table->index(['recyclable_type_id', 'created_at']);
             $table->index(['model_id', 'created_at']);
             $table->index(['status', 'created_at']);
         });

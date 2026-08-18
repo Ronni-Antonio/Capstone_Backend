@@ -20,6 +20,8 @@ use App\Http\Controllers\ClassificationController;
 use App\Http\Controllers\AiModelController;
 use App\Http\Controllers\PredictionController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\ProphetController;
+use App\Http\Controllers\ReportsAnalyticsController;
 
 Route::get('/user', fn(Request $request)=>$request->user())->middleware('auth:sanctum');
 
@@ -28,6 +30,10 @@ Route::post('auth/logout',[AuthController::class,'logout'])->middleware('auth:sa
 
 // Lightweight initial dashboard payload.
 Route::get('dashboard',[DashboardController::class,'index']);
+Route::get('reports-analytics',[ReportsAnalyticsController::class,'index']);
+Route::get('reports-analytics/pdf',[ReportsAnalyticsController::class,'pdf']);
+Route::get('prophet/forecast-data',[ProphetController::class,'getForecastData']);
+Route::post('prophet/run-forecast',[ProphetController::class,'runForecast']);
 Route::post('auth/forgot-password/send-otp',[\App\Http\Controllers\ForgotPasswordController::class,'sendOtp']);
 Route::post('auth/forgot-password/verify-otp',[\App\Http\Controllers\ForgotPasswordController::class,'verifyOtp']);
 Route::post('auth/forgot-password/reset',[\App\Http\Controllers\ForgotPasswordController::class,'resetPassword']);
@@ -77,6 +83,7 @@ Route::post('redemptions/initiate/{student_id}/{reward_id}',[RedemptionControlle
 Route::resource('redemptions',RedemptionController::class)->except(['create','edit']);
 
 Route::resource('collections',CollectionController::class)->except(['create','edit']);
+Route::match(['put', 'patch'], 'machines/{machine}/compartments/{compartment}/sensor', [MachineController::class, 'updateCompartmentSensor']);
 Route::resource('machines',MachineController::class)->except(['create','edit']);
 Route::resource('machine-logs',MachineLogController::class)->except(['create','edit']);
 Route::resource('notifications',NotificationController::class)->except(['create','edit']);

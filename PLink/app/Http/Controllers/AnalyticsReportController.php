@@ -12,7 +12,7 @@ class AnalyticsReportController extends Controller
         $v=$request->validate([
             'report_type'=>'required|string|max:100','title'=>'required|string|max:255',
             'report_date_start'=>'nullable|date','report_date_end'=>'nullable|date',
-            'total_items_collected'=>'nullable|integer|min:0','total_weight_kg'=>'nullable|numeric|min:0',
+            'total_items_collected'=>'nullable|integer|min:0',
             'total_points_awarded'=>'nullable|integer','total_rewards_redeemed'=>'nullable|integer|min:0',
             'total_students_participated'=>'nullable|integer|min:0','summary'=>'nullable|array',
             'predictive_insights'=>'nullable|array','generated_by_user_id'=>'nullable|exists:users,id'
@@ -26,7 +26,7 @@ class AnalyticsReportController extends Controller
         $r->update($request->validate([
             'report_type'=>'sometimes|string|max:100','title'=>'sometimes|string|max:255',
             'report_date_start'=>'nullable|date','report_date_end'=>'nullable|date',
-            'total_items_collected'=>'sometimes|integer|min:0','total_weight_kg'=>'sometimes|numeric|min:0',
+            'total_items_collected'=>'sometimes|integer|min:0',
             'total_points_awarded'=>'sometimes|integer','total_rewards_redeemed'=>'sometimes|integer|min:0',
             'total_students_participated'=>'sometimes|integer|min:0','summary'=>'nullable|array',
             'predictive_insights'=>'nullable|array'

@@ -10,12 +10,12 @@ class AnalyticsReport extends Model
     protected $primaryKey = 'analytics_report_id';
     protected $fillable = [
         'generated_by_user_id','report_type','title','report_date_start','report_date_end',
-        'total_items_collected','total_weight_kg','total_points_awarded',
+        'total_items_collected','total_points_awarded',
         'total_rewards_redeemed','total_students_participated','summary','predictive_insights'
     ];
     protected $casts = [
         'report_date_start'=>'date','report_date_end'=>'date',
-        'total_items_collected'=>'integer','total_weight_kg'=>'decimal:2',
+        'total_items_collected'=>'integer',
         'total_points_awarded'=>'integer','total_rewards_redeemed'=>'integer',
         'total_students_participated'=>'integer','summary'=>'array','predictive_insights'=>'array'
     ];

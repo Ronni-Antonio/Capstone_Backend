@@ -6,7 +6,7 @@ use App\Models\AiClassification;
 use App\Models\AiModel;
 use App\Models\AnalyticsReport;
 use App\Models\GradeLevel;
-use App\Models\PlasticType;
+use App\Models\RecyclableType;
 use App\Models\PointTransaction;
 use App\Models\Prediction;
 use App\Models\RecyclingItem;
@@ -15,6 +15,8 @@ use App\Models\Rewards;
 use App\Models\RfidCard;
 use App\Models\Section;
 use App\Models\SmartBin;
+use App\Models\SmartBinCompartment;
+use App\Models\SmartBinCompartmentLog;
 use App\Models\SmartBinLog;
 use App\Models\Students;
 use App\Models\systemSettings;
@@ -102,45 +104,136 @@ class DatabaseSeeder extends Seeder
 
         /*
         |--------------------------------------------------------------------------
-        | 5. PLASTIC TYPES
+        | 5. RECYCLABLE TYPES
         |--------------------------------------------------------------------------
         |
         | is_accepted is explicitly supplied because it controls whether a
         | classification can earn points.
         |--------------------------------------------------------------------------
         */
-        $plasticTypes = [];
+        $recyclableTypes = [];
 
-        $plasticTypes['PET'] = PlasticType::updateOrCreate(
-            ['code' => 'PET'],
+        $recyclableTypes['PET'] = RecyclableType::updateOrCreate(
+            ['code' => 'Code 1'],
             [
                 'name' => 'PET Bottle',
+                'material_category' => 'plastic',
                 'points_value' => 2,
                 'is_accepted' => true,
                 'is_active' => true,
             ]
         );
 
-        $plasticTypes['CONTAMINATED'] = PlasticType::updateOrCreate(
-            ['code' => 'CONTAMINATED'],
+        $recyclableTypes['HDPE'] = RecyclableType::updateOrCreate(
+            ['code' => 'Code 2'],
             [
-                'name' => 'Contaminated PET Bottle',
+                'name' => 'HDPE Bottle',
+                'material_category' => 'plastic',
+                'points_value' => 3,
+                'is_accepted' => true,
+                'is_active' => true,
+            ]
+        );
+
+        $recyclableTypes['PVC'] = RecyclableType::updateOrCreate(
+            ['code' => 'Code 3'],
+            [
+                'name' => 'PVC Bottle',
+                'material_category' => 'plastic',
                 'points_value' => 1,
                 'is_accepted' => true,
                 'is_active' => true,
             ]
         );
 
-        $plasticTypes['INVALID'] = PlasticType::updateOrCreate(
+
+        $recyclableTypes['LDPE'] = RecyclableType::updateOrCreate(
+            ['code' => 'Code 4'],
+            [
+                'name' => 'LDPE Bottle',
+                'material_category' => 'plastic',
+                'points_value' => 2,
+                'is_accepted' => true,
+                'is_active' => true,
+            ]
+        );
+
+        $recyclableTypes['PP'] = RecyclableType::updateOrCreate(
+            ['code' => 'Code 5'],
+            [
+                'name' => 'PP Bottle',
+                'material_category' => 'plastic',
+                'points_value' => 2,
+                'is_accepted' => true,
+                'is_active' => true,
+            ]
+        );
+
+        $recyclableTypes['PS'] = RecyclableType::updateOrCreate(
+            ['code' => 'Code 6'],
+            [
+                'name' => 'PS Bottle',
+                'material_category' => 'plastic',
+                'points_value' => 1,
+                'is_accepted' => true,
+                'is_active' => true,
+            ]
+        );
+
+        $recyclableTypes['PC'] = RecyclableType::updateOrCreate(
+            ['code' => 'Code 7'],
+            [
+                'name' => 'PC Bottle',
+                'material_category' => 'plastic',
+                'points_value' => 1,
+                'is_accepted' => true,
+                'is_active' => true,
+            ]
+        );
+
+        $recyclableTypes['PLA'] = RecyclableType::updateOrCreate(
+            ['code' => 'Code 8'],
+            [
+                'name' => 'PLA Plastic',
+                'material_category' => 'plastic',
+                'points_value' => 1,
+                'is_accepted' => true,
+                'is_active' => true,
+            ]
+        );
+
+        $recyclableTypes['PAPER'] = RecyclableType::updateOrCreate(
+            ['code' => 'Code 9'],
+            [
+                'name' => 'White Paper',
+                'material_category' => 'paper',
+                'points_value' => 1,
+                'is_accepted' => true,
+                'is_active' => true,
+            ]
+        );
+
+        $recyclableTypes['CONTAMINATED'] = RecyclableType::updateOrCreate(
+            ['code' => 'CONTAMINATED'],
+            [
+                'name' => 'Contaminated PET Bottle',
+                'material_category' => 'plastic',
+                'points_value' => 1,
+                'is_accepted' => true,
+                'is_active' => true,
+            ]
+        );
+
+        $recyclableTypes['INVALID'] = RecyclableType::updateOrCreate(
             ['code' => 'INVALID'],
             [
                 'name' => 'Invalid / Non-PET',
+                'material_category' => 'other',
                 'points_value' => 0,
                 'is_accepted' => false,
                 'is_active' => true,
             ]
         );
-
         /*
         |--------------------------------------------------------------------------
         | 6. SMART BIN
@@ -162,6 +255,40 @@ class DatabaseSeeder extends Seeder
                 'full_threshold_cm' => 20,
                 'empty_threshold_cm' => 80,
                 'last_maintenance_at' => null,
+                'last_active_at' => now(),
+            ]
+        );
+
+
+        // One physical Smart Bin, two independent HC-SR04-monitored compartments.
+        $plasticCompartment = SmartBinCompartment::updateOrCreate(
+            [
+                'smart_bin_id' => $smartBin->smart_bin_id,
+                'material_category' => 'plastic',
+            ],
+            [
+                'name' => 'Plastic Compartment',
+                'status' => 'online',
+                'current_distance_cm' => 68,
+                'current_fill_percentage' => 20,
+                'full_threshold_cm' => 20,
+                'empty_threshold_cm' => 80,
+                'last_active_at' => now(),
+            ]
+        );
+
+        $paperCompartment = SmartBinCompartment::updateOrCreate(
+            [
+                'smart_bin_id' => $smartBin->smart_bin_id,
+                'material_category' => 'paper',
+            ],
+            [
+                'name' => 'Paper Compartment',
+                'status' => 'online',
+                'current_distance_cm' => 50,
+                'current_fill_percentage' => 50,
+                'full_threshold_cm' => 20,
+                'empty_threshold_cm' => 80,
                 'last_active_at' => now(),
             ]
         );
@@ -382,6 +509,31 @@ class DatabaseSeeder extends Seeder
                 $log->created_at = $timestamp;
                 $log->updated_at = $timestamp;
                 $log->saveQuietly();
+
+
+                // Keep independent historical readings for each physical compartment.
+                $plasticFill = min(95, max(0, $fillPercentage));
+                $paperFill = min(95, max(0, round($fillPercentage * 0.75 + rand(0, 8))));
+
+                foreach ([
+                    [$plasticCompartment, $plasticFill],
+                    [$paperCompartment, $paperFill],
+                ] as [$compartment, $compartmentFill]) {
+                    $compartmentDistance = $compartment->empty_threshold_cm - (
+                        ($compartment->empty_threshold_cm - $compartment->full_threshold_cm) *
+                        ($compartmentFill / 100)
+                    );
+
+                    $compartmentLog = SmartBinCompartmentLog::create([
+                        'compartment_id' => $compartment->compartment_id,
+                        'distance_cm' => (int) round($compartmentDistance),
+                        'fill_percentage' => (int) round($compartmentFill),
+                        'status' => $compartmentFill >= 80 ? 'almost_full' : 'normal',
+                    ]);
+                    $compartmentLog->created_at = $timestamp;
+                    $compartmentLog->updated_at = $timestamp;
+                    $compartmentLog->saveQuietly();
+                }
             }
         }
 
@@ -403,7 +555,7 @@ class DatabaseSeeder extends Seeder
             $transactionsToday = rand(1, 3);
 
             for ($t = 0; $t < $transactionsToday; $t++) {
-                DB::transaction(function () use ($students, $rfidCards, $smartBin, $cnnModel, $plasticTypes, $day) {
+                DB::transaction(function () use ($students, $rfidCards, $smartBin, $cnnModel, $recyclableTypes, $day) {
                     $student = $students->random();
                     $rfidCard = $rfidCards->get($student->student_id);
 
@@ -431,16 +583,48 @@ class DatabaseSeeder extends Seeder
                     for ($itemNumber = 1; $itemNumber <= $totalItems; $itemNumber++) {
                         $roll = rand(1, 100);
 
-                        if ($roll <= 70) {
-                            $plasticType = $plasticTypes['PET'];
+                        if ($roll <= 10) {
+                            $recyclableType = $recyclableTypes['PET'];
+                            $classificationStatus = 'valid';
+                            $itemStatus = 'accepted';
+                        } elseif ($roll <= 20) {
+                            $recyclableType = $recyclableTypes['CONTAMINATED'];
+                            $classificationStatus = 'valid';
+                            $itemStatus = 'accepted';
+                        } elseif ($roll <= 35) {
+                            $recyclableType = $recyclableTypes['HDPE'];
+                            $classificationStatus = 'valid';
+                            $itemStatus = 'accepted';
+                        } elseif ($roll <= 48) {
+                            $recyclableType = $recyclableTypes['PVC'];
+                            $classificationStatus = 'valid';
+                            $itemStatus = 'accepted';
+                        } else if ($roll <= 59) {
+                            $recyclableType = $recyclableTypes['LDPE'];
+                            $classificationStatus = 'valid';
+                            $itemStatus = 'accepted';
+                        } elseif ($roll <= 70) {
+                            $recyclableType = $recyclableTypes['PP'];
+                            $classificationStatus = 'valid';
+                            $itemStatus = 'accepted';
+                        } elseif ($roll <= 80) {
+                            $recyclableType = $recyclableTypes['PS'];
                             $classificationStatus = 'valid';
                             $itemStatus = 'accepted';
                         } elseif ($roll <= 90) {
-                            $plasticType = $plasticTypes['CONTAMINATED'];
+                            $recyclableType = $recyclableTypes['PC'];
+                            $classificationStatus = 'valid';
+                            $itemStatus = 'accepted';
+                        } elseif ($roll <= 95) {
+                            $recyclableType = $recyclableTypes['PLA'];
+                            $classificationStatus = 'valid';
+                            $itemStatus = 'accepted';
+                        } elseif ($roll <= 98) {
+                            $recyclableType = $recyclableTypes['PAPER'];
                             $classificationStatus = 'valid';
                             $itemStatus = 'accepted';
                         } else {
-                            $plasticType = $plasticTypes['INVALID'];
+                            $recyclableType = $recyclableTypes['INVALID'];
                             $classificationStatus = 'rejected';
                             $itemStatus = 'rejected';
                         }
@@ -457,7 +641,7 @@ class DatabaseSeeder extends Seeder
 
                         AiClassification::create([
                             'recycling_item_id' => $item->recycling_item_id,
-                            'plastic_type_id' => $plasticType->plastic_type_id,
+                            'recyclable_type_id' => $recyclableType->recyclable_type_id,
                             'model_id' => $cnnModel->model_id,
                             'confidence_score' => $confidence,
                             'status' => $classificationStatus,
@@ -466,8 +650,8 @@ class DatabaseSeeder extends Seeder
                             'classified_at' => $transactionDate->copy()->addSeconds(rand(1, 10)),
                         ]);
 
-                        if ($classificationStatus === 'valid' && $plasticType->is_accepted) {
-                            $totalPoints += $plasticType->points_value;
+                        if ($classificationStatus === 'valid' && $recyclableType->is_accepted) {
+                            $totalPoints += $recyclableType->points_value;
                         }
                     }
 

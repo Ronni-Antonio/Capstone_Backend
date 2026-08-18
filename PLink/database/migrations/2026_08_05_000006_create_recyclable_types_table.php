@@ -4,12 +4,11 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
-return new class extends Migration
-{
+return new class extends Migration {
     public function up(): void
     {
-        Schema::create('plastic_types', function (Blueprint $table) {
-            $table->id('plastic_type_id');
+        Schema::create('recyclable_types', function (Blueprint $table) {
+            $table->id('recyclable_type_id');
             $table->string('code', 50)->unique(); // PET, INVALID, etc.
             $table->string('name')->unique();
             $table->unsignedInteger('points_value')->default(0);
@@ -23,6 +22,6 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::dropIfExists('plastic_types');
+        Schema::dropIfExists('recyclable_types');
     }
 };

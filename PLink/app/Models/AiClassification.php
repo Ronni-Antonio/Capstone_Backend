@@ -9,13 +9,19 @@ class AiClassification extends Model
     protected $table = 'ai_classifications';
     protected $primaryKey = 'classification_id';
     protected $fillable = [
-        'recycling_item_id','plastic_type_id','model_id','confidence_score',
-        'status','notes','is_verified','classified_at'
+        'recycling_item_id',
+        'recyclable_type_id',
+        'model_id',
+        'confidence_score',
+        'status',
+        'notes',
+        'is_verified',
+        'classified_at'
     ];
     protected $casts = [
-        'confidence_score'=>'decimal:2',
-        'is_verified'=>'boolean',
-        'classified_at'=>'datetime'
+        'confidence_score' => 'decimal:2',
+        'is_verified' => 'boolean',
+        'classified_at' => 'datetime'
     ];
 
     public function item(): BelongsTo
@@ -23,9 +29,9 @@ class AiClassification extends Model
         return $this->belongsTo(RecyclingItem::class, 'recycling_item_id', 'recycling_item_id');
     }
 
-    public function plasticType(): BelongsTo
+    public function recyclableType(): BelongsTo
     {
-        return $this->belongsTo(PlasticType::class, 'plastic_type_id', 'plastic_type_id');
+        return $this->belongsTo(RecyclableType::class, 'recyclable_type_id', 'recyclable_type_id');
     }
 
     public function model(): BelongsTo

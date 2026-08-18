@@ -28,6 +28,11 @@ class SmartBin extends Model
         'last_active_at' => 'datetime',
     ];
 
+    public function compartments(): HasMany
+    {
+        return $this->hasMany(SmartBinCompartment::class, 'smart_bin_id', 'smart_bin_id');
+    }
+
     public function transactions(): HasMany
     {
         return $this->hasMany(RecyclingTransaction::class, 'smart_bin_id', 'smart_bin_id');
