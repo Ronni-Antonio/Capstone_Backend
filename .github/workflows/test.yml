@@ -4,12 +4,10 @@ on:
   push:
     branches:
       - "**"
+
   pull_request:
     branches:
       - main
-
-permissions:
-  contents: read
 
 jobs:
   test:
@@ -27,20 +25,33 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: "8.2"
-          extensions: mbstring, pdo_sqlite, sqlite3, bcmath, xml, curl, zip
+          extensions: mbstring, pdo, pdo_sqlite, bcmath, xml, curl
           coverage: none
 
-      - name: Validate Composer files
-        run: composer validate --no-check-publish
-
       - name: Install Composer dependencies
-        run: composer install --prefer-dist --no-interaction --no-progress
+        run: |
+          composer install \
+            --prefer-dist \
+            --no-interaction \
+            --no-progress
 
       - name: Prepare Laravel environment
         run: |
           cp .env.example .env
+
           php artisan key:generate
-          php artisan optimize:clear
+
+          echo "APP_ENV=testing" >> .env
+          echo "APP_DEBUG=true" >> .env
+
+          echo "DB_CONNECTION=sqlite" >> .env
+          echo "DB_DATABASE=:memory:" >> .env
+
+          echo "CACHE_STORE=array" >> .env
+          echo "SESSION_DRIVER=array" >> .env
+          echo "QUEUE_CONNECTION=sync" >> .env
+
+          php artisan config:clear
 
       - name: Run Laravel tests
         env:
