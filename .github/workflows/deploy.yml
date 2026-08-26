@@ -1,0 +1,97 @@
+name: Deploy Backend
+
+on:
+  workflow_run:
+    workflows:
+      - "Backend CI"
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout tested commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Configure SSH
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/ec2_key
+          chmod 600 ~/.ssh/ec2_key
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+
+      - name: Prepare application directory on EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+        run: |
+          ssh -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" '
+            sudo mkdir -p /var/www/plink-backend/PLink &&
+            sudo chown -R "$USER":"$USER" /var/www/plink-backend
+          '
+
+      - name: Upload Laravel application to EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+        run: |
+          rsync -az --delete \
+            --exclude='.env' \
+            --exclude='vendor/' \
+            --exclude='node_modules/' \
+            --exclude='storage/logs/' \
+            --exclude='storage/framework/cache/' \
+            --exclude='storage/framework/sessions/' \
+            --exclude='storage/framework/views/' \
+            -e "ssh -i ~/.ssh/ec2_key" \
+            PLink/ "$EC2_USER@$EC2_HOST:/var/www/plink-backend/PLink/"
+
+      - name: Install and optimize Laravel on EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+        run: |
+          ssh -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" '
+            set -e
+            cd /var/www/plink-backend/PLink
+
+            test -f .env || { echo "ERROR: /var/www/plink-backend/PLink/.env is missing"; exit 1; }
+
+            composer install \
+              --no-dev \
+              --prefer-dist \
+              --optimize-autoloader \
+              --no-interaction \
+              --no-progress
+
+            php artisan migrate --force
+            php artisan optimize:clear
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
+
+            sudo chown -R www-data:www-data storage bootstrap/cache
+            sudo chmod -R ug+rwX storage bootstrap/cache
+
+            php artisan queue:restart || true
+            sudo systemctl reload nginx
+          '
