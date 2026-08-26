@@ -1,357 +1,225 @@
 <?php
-
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
 use App\Models\Students;
+use App\Models\GradeLevel;
+use App\Models\Section;
+use App\Models\RfidCard;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
-use Illuminate\Support\Facades\Cache;
+use Illuminate\Validation\Rule;
 
 class StudentController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
     public function index()
     {
-        // Get all students with their transactions and redemptions
-        $students = Students::with(['transactions', 'redemptions'])->get();
+        $students = Students::query()
+            ->select([
+                'student_id','student_number','first_name','last_name',
+                'grade_level_id','section_id','status','points_balance','created_at'
+            ])
+            ->with([
+                'gradeLevel:grade_level_id,name',
+                'section:section_id,name',
+                'rfidCards' => fn ($q) => $q
+                    ->where('status','active')
+                    ->select('rfid_card_id','student_id','card_uid','status','assigned_at'),
+            ])
+            ->withSum([
+                'transactions as total_items_recycled' => fn ($q) => $q->where('status','completed')
+            ], 'total_items')
+            ->latest('student_id')
+            ->get();
+
         return response()->json($students);
     }
 
-    /**
-     * Show the form for creating a new resource.
-     */
-    public function create()
-    {
-        //
-    }
-
-    /**
-     * Store a newly created resource in storage.
-     */
     public function store(Request $request)
     {
-        try {
-            $validated = $request->validate([
-                'student_number' => 'required|numeric|unique:students,student_number|max_digits:12',
-                'first_name' => 'required|string',
-                'last_name' => 'required|string',
-                'grade_level' => 'required|integer',
-                'section' => 'required|string',
-                'points_balance' => 'nullable|integer',
-            ]);
-
-            $validated['points_balance'] = $validated['points_balance'] ?? 0;
-
-            $student = Students::create($validated);
-
-
-            return response()->json($student, 201);
-        } catch (\Exception $e) {
-            return response()->json([
-                'error' => $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * Import students from CSV file
-     */
-    public function importCSV(Request $request)
-    {
-        // Validate that a file was uploaded
-        $request->validate([
-            'csv_file' => 'required|file|mimes:csv,txt'
+        $validated = $request->validate([
+            'student_number'=>'required|string|max:255|unique:students,student_number',
+            'first_name'=>'required|string|max:255',
+            'last_name'=>'required|string|max:255',
+            'grade_level_id'=>'required|exists:grade_levels,grade_level_id',
+            'section_id'=>'required|exists:sections,section_id',
+            'status'=>'nullable|in:active,inactive',
         ]);
+        $validated['status']=$validated['status'] ?? 'inactive';
+        $validated['points_balance']=0;
 
-        $file = $request->file('csv_file');
-        $path = $file->getRealPath();
-        $handle = fopen($path, 'r');
-
-        if (!$handle) {
-            return response()->json(['error' => 'Failed to open CSV file'], 500);
-        }
-
-        $header = fgetcsv($handle); // Get the first row as headers
-        if (!$header) {
-            fclose($handle);
-            return response()->json(['error' => 'CSV file is empty'], 400);
-        }
-
-        $expectedHeaders = ['student_number', 'first_name', 'last_name', 'grade_level', 'section'];
-        $normalizedHeader = array_map('strtolower', array_map('trim', $header));
-        $missingColumns = array_diff($expectedHeaders, $normalizedHeader);
-
-        if (!empty($missingColumns)) {
-            fclose($handle);
-            return response()->json([
-                'error' => 'Missing required columns in CSV',
-                'missing' => array_values($missingColumns)
-            ], 400);
-        }
-
-        // Create a map for header positions
-        $headerMap = array_flip($normalizedHeader);
-
-        $successCount = 0;
-        $errors = [];
-        $rowNumber = 1;
-
-        while (($row = fgetcsv($handle)) !== false) {
-            $rowNumber++;
-
-            // Skip empty rows
-            if (empty(array_filter($row))) {
-                continue;
-            }
-
-            // Map CSV row to data array using headerMap
-            $studentData = [
-                'student_number' => trim($row[$headerMap['student_number']] ?? ''),
-                'first_name' => trim($row[$headerMap['first_name']] ?? ''),
-                'last_name' => trim($row[$headerMap['last_name']] ?? ''),
-                'grade_level' => trim($row[$headerMap['grade_level']] ?? ''),
-                'section' => trim($row[$headerMap['section']] ?? ''),
-            ];
-
-            // Validate the student data
-            $validator = Validator::make($studentData, [
-                'student_number' => 'required|numeric|unique:students,student_number|max_digits:12',
-                'first_name' => 'required|string',
-                'last_name' => 'required|string',
-                'grade_level' => 'required|integer',
-                'section' => 'required|string',
-
-            ]);
-
-            if ($validator->fails()) {
-                $errors[] = [
-                    'row' => $rowNumber,
-                    'data' => $studentData,
-                    'errors' => $validator->errors()->all()
-                ];
-                continue;
-            }
-
-            // Add default points balance
-            $studentData['points_balance'] = 0;
-            $studentData['status'] = 'inactive';
-
-            // Create the student
-            try {
-                Students::create($studentData);
-                $successCount++;
-            } catch (\Exception $e) {
-                $errors[] = [
-                    'row' => $rowNumber,
-                    'data' => $studentData,
-                    'errors' => [$e->getMessage()]
-                ];
-            }
-        }
-
-        fclose($handle);
-
-        return response()->json([
-            'success' => true,
-            'imported' => $successCount,
-            'errors' => $errors
-        ], 200);
+        return response()->json(Students::create($validated)->load(['gradeLevel','section','rfidCards']),201);
     }
 
-    /**
-     * Display the specified resource.
-     */
     public function show(string $id)
     {
-        $student = Students::with(['transactions', 'redemptions'])->findOrFail($id);
+        $student=Students::with([
+            'gradeLevel','section','rfidCards',
+            'transactions.items.classification.plasticType',
+            'redemptions.reward','pointTransactions'
+        ])->findOrFail($id);
+
         return response()->json($student);
     }
 
-    /**
-     * Show the form for editing the specified resource.
-     */
-    public function edit(string $id)
+    public function update(Request $request,string $id)
     {
-        //
+        $student=Students::findOrFail($id);
+        $validated=$request->validate([
+            'student_number'=>['sometimes','string','max:255',Rule::unique('students','student_number')->ignore($student->student_id,'student_id')],
+            'first_name'=>'sometimes|string|max:255',
+            'last_name'=>'sometimes|string|max:255',
+            'grade_level_id'=>'sometimes|exists:grade_levels,grade_level_id',
+            'section_id'=>'sometimes|exists:sections,section_id',
+            'status'=>'sometimes|in:active,inactive',
+        ]);
+        $student->update($validated);
+        return response()->json($student->load(['gradeLevel','section','rfidCards']));
     }
 
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, string $id)
+    public function importCSV(Request $request)
     {
+        $request->validate(['csv_file'=>'required|file|mimes:csv,txt']);
+        $handle=fopen($request->file('csv_file')->getRealPath(),'r');
+        if(!$handle) return response()->json(['error'=>'Failed to open CSV file'],500);
+
+        $header=fgetcsv($handle);
+        if(!$header){ fclose($handle); return response()->json(['error'=>'CSV file is empty'],400); }
+        $header=array_map(fn($v)=>strtolower(trim($v)), $header);
+        $required=['student_number','first_name','last_name','grade_level','section'];
+        $missing=array_values(array_diff($required,$header));
+        if($missing){ fclose($handle); return response()->json(['error'=>'Missing required columns','missing'=>$missing],422); }
+
+        $map=array_flip($header); $imported=0; $errors=[]; $rowNo=1;
+        DB::beginTransaction();
         try {
-            $student = Students::findOrFail($id);
-            
-            $validated = $request->validate([
-                'student_number' => 'numeric|unique:students,student_number,' . $id . ',student_id|max_digits:12',
-                'first_name' => 'string',
-                'last_name' => 'string',
-                'grade_level' => 'integer',
-                'section' => 'string',
-                'status' => 'in:active,inactive',
-                'card_uid' => 'nullable|string',
-                'points_balance' => 'integer',
-            ]);
+            while(($row=fgetcsv($handle))!==false){
+                $rowNo++;
+                if(!count(array_filter($row,fn($v)=>trim((string)$v)!==''))) continue;
+                $data=[
+                    'student_number'=>trim($row[$map['student_number']]??''),
+                    'first_name'=>trim($row[$map['first_name']]??''),
+                    'last_name'=>trim($row[$map['last_name']]??''),
+                    'grade_level'=>trim($row[$map['grade_level']]??''),
+                    'section'=>trim($row[$map['section']]??''),
+                ];
+                $v=Validator::make($data,[
+                    'student_number'=>'required|string|max:255|unique:students,student_number',
+                    'first_name'=>'required|string|max:255',
+                    'last_name'=>'required|string|max:255',
+                    'grade_level'=>'required|string|max:255',
+                    'section'=>'required|string|max:255',
+                ]);
+                if($v->fails()){ $errors[]=['row'=>$rowNo,'data'=>$data,'errors'=>$v->errors()->all()]; continue; }
 
-            $student->update($validated);
+                $grade=GradeLevel::firstOrCreate(['name'=>$data['grade_level']]);
+                $section=Section::firstOrCreate(['name'=>$data['section']]);
 
-            return response()->json($student, 200);
-        } catch (\Exception $e) {
-            return response()->json([
-                'error' => $e->getMessage()
-            ], 500);
+                Students::create([
+                    'student_number'=>$data['student_number'],
+                    'first_name'=>$data['first_name'],
+                    'last_name'=>$data['last_name'],
+                    'grade_level_id'=>$grade->grade_level_id,
+                    'section_id'=>$section->section_id,
+                    'status'=>'inactive',
+                    'points_balance'=>0,
+                ]);
+                $imported++;
+            }
+            DB::commit();
+        } catch(\Throwable $e){
+            DB::rollBack(); fclose($handle);
+            return response()->json(['error'=>$e->getMessage()],500);
         }
+        fclose($handle);
+        return response()->json(['success'=>true,'imported'=>$imported,'errors'=>$errors]);
     }
 
-    /**
-     * Activate a student's card
-     */
+    public function assignCard(Request $request)
+    {
+        $validated=$request->validate([
+            'student_id'=>'required|exists:students,student_id',
+            'card_uid'=>'required|string|max:100|unique:rfid_cards,card_uid',
+        ]);
+        $card=DB::transaction(function() use($validated){
+            $student=Students::lockForUpdate()->findOrFail($validated['student_id']);
+            RfidCard::where('student_id',$student->student_id)->where('status','active')->update(['status'=>'unassigned']);
+            $card=RfidCard::create([
+                'student_id'=>$student->student_id,'card_uid'=>strtoupper(trim($validated['card_uid'])),
+                'status'=>'active','assigned_at'=>now()
+            ]);
+            $student->update(['status'=>'active']);
+            return $card;
+        });
+        return response()->json(['status'=>'success','message'=>'Card paired successfully','card'=>$card],201);
+    }
+
     public function activate(string $id)
     {
-        try {
-        $student = Students::findOrFail($id);
-        
-        $esp32Url = env('ESP32_URL'); // Ensure this points to http://<esp32-ip>/prepare-activation
-        if ($esp32Url) {
-            $client = new \GuzzleHttp\Client();
-            $client->post($esp32Url, [
-                'json' => [
-                    'student_id' => $student->student_id
-                ],
-                'timeout' => 5
-            ]);
+        $student=Students::findOrFail($id);
+        $esp32Url=env('ESP32_URL');
+        if($esp32Url){
+            try {
+                (new \GuzzleHttp\Client())->post(rtrim($esp32Url,'/').'/prepare-activation',[
+                    'json'=>['student_id'=>$student->student_id],
+                    'timeout'=>5
+                ]);
+            } catch(\Throwable $e) {
+                return response()->json(['error'=>'Unable to contact ESP32','details'=>$e->getMessage()],502);
+            }
         }
-        
-        return response()->json(['message' => 'Please tap card on reader now.'], 200);
-    } catch (\Exception $e) {
-        return response()->json(['error' => $e->getMessage()], 500);
-    }
-    }
-
-        public function assignCard(Request $request)
-    {
-        $request->validate([
-            'student_id' => 'required',
-            'card_uid' => 'required|string|unique:students,card_uid'
-        ]);
-
-        try {
-            $student = Students::findOrFail($request->student_id);
-            
-            // Save the hardware card UID to the user and mark active
-            $student->update([
-                'card_uid' => $request->card_uid,
-                'status' => 'active'
-            ]);
-
-            return response()->json(['status' => 'success', 'message' => 'Card paired successfully'], 200);
-        } catch (\Exception $e) {
-            return response()->json(['error' => $e->getMessage()], 500);
-        }
+        return response()->json(['message'=>'Please tap card on reader now.']);
     }
 
     public function activateStatus(string $id)
     {
-        try {
-            $student = Students::findOrFail($id);
-            
-            // If student has card_uid and is active, return success
-            if ($student->card_uid && $student->status === 'active') {
-                return response()->json(['status' => 'success'], 200);
-            }
-            
-            // Otherwise, still pending
-            return response()->json(['status' => 'pending'], 200);
-        } catch (\Exception $e) {
-            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
-        }
+        $student=Students::with('rfidCards')->findOrFail($id);
+        $active=$student->rfidCards->contains(fn($card)=>$card->status==='active');
+        return response()->json(['status'=>$active?'success':'pending']);
     }
+
     public function cancelActivation(string $id)
     {
-        // You can implement this to tell ESP32 to cancel the activation session
-        return response()->json(['message' => 'Activation cancelled'], 200);
+        return response()->json(['message'=>'Activation cancelled']);
     }
 
     public function identifyCard(Request $request)
     {
-        $request->validate(['card_uid' => 'required|string']);
+        $validated=$request->validate(['card_uid'=>'required|string|max:100']);
+        $card=RfidCard::with('student')
+            ->where('card_uid',strtoupper(trim($validated['card_uid'])))
+            ->where('status','active')->first();
 
-        // 1. Reset any old active scan flags left over in the database
-        Students::where('is_currently_scanned', true)->update(['is_currently_scanned' => false]);
-
-        // 2. Find the student who tapped the card
-        $student = Students::where('card_uid', $request->card_uid)->first();
-
-        if (!$student) {
-            return response()->json(['error' => 'Unrecognized card.'], 404);
-        }
-
-        // 3. Set their database active scan flag to true
-        $student->update(['is_currently_scanned' => true]);
+        if(!$card) return response()->json(['error'=>'Unrecognized or inactive card.'],404);
 
         return response()->json([
-            'success' => true,
-            'student_id' => $student->student_id,
-            'points_balance' => $student->points_balance
-        ], 200);
+            'success'=>true,
+            'student_id'=>$card->student_id,
+            'rfid_card_id'=>$card->rfid_card_id,
+            'points_balance'=>(int)$card->student->points_balance,
+            'student'=>$card->student
+        ]);
     }
 
-    /**
-     * Hit by your Frontend Long Polling Loop
-     */
     public function checkActiveScanSession()
     {
-        // Search the database for whichever student has an active scanning flag right now
-        $scannedStudent = Students::where('is_currently_scanned', true)->first();
-
-        if ($scannedStudent) {
-            return response()->json([
-                'student_found' => true, // Enforces exact lowercase boolean match for React
-                'student' => [
-                    'id' => $scannedStudent->student_id,
-                    'student_id' => $scannedStudent->student_id,
-                    'name' => $scannedStudent->name ?? $scannedStudent->first_name . ' ' . $scannedStudent->last_name,
-                    'points_balance' => (int) $scannedStudent->points_balance
-                ]
-            ], 200);
-        }
-
-        return response()->json([
-            'student_found' => false,
-            'student' => null
-        ], 200);
+        // Compatibility endpoint. The new design does not store a global scan flag.
+        return response()->json(['student_found'=>false,'student'=>null]);
     }
 
-    /**
-     * Hit by React when resetting or completing a checkout session
-     */
     public function clearScanSession()
     {
-        // Purge all scanning active flags cleanly
-        Students::where('is_currently_scanned', true)->update(['is_currently_scanned' => false]);
-        
-        return response()->json(['success' => true], 200);
+        return response()->json(['success'=>true]);
     }
 
-    /**
-     * Remove the specified resource from storage.
-     */
     public function destroy(string $id)
     {
-        try {
-            $student = Students::findOrFail($id);
-            $student->delete();
-            
-            return response()->json(null, 204);
-        } catch (\Exception $e) {
-            return response()->json([
-                'error' => $e->getMessage()
-            ], 500);
+        // Student history should normally be retained; restrict deletion if historical records exist.
+        $student=Students::findOrFail($id);
+        if($student->transactions()->exists() || $student->pointTransactions()->exists() || $student->redemptions()->exists()){
+            return response()->json(['error'=>'Student has historical records and cannot be deleted. Set status to inactive instead.'],409);
         }
+        $student->delete();
+        return response()->json(null,204);
     }
-
-    
 }

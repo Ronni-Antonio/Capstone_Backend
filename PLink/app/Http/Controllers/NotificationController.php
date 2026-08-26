@@ -1,5 +1,4 @@
 <?php
-
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
@@ -7,73 +6,27 @@ use App\Models\Notification;
 
 class NotificationController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
-    public function index()
-    {
-        $notifications = Notification::with('student')->get();
-        return response()->json($notifications);
-    }
-
-    /**
-     * Store a newly created resource in storage.
-     */
+    public function index(){ return response()->json(Notification::with(['student','smartBin'])->latest()->get()); }
     public function store(Request $request)
     {
-        $validated = $request->validate([
-            'student_id' => 'nullable|exists:students,student_id',
-            'notification_type' => 'required|string',
-            'title' => 'required|string',
-            'message' => 'required|string',
-            'data' => 'nullable|array',
-            'is_read' => 'boolean|default:false',
-            'read_at' => 'nullable|date'
+        $v=$request->validate([
+            'student_id'=>'nullable|exists:students,student_id',
+            'smart_bin_id'=>'nullable|exists:smart_bins,smart_bin_id',
+            'notification_type'=>'required|string|max:100','title'=>'required|string|max:255',
+            'message'=>'required|string','data'=>'nullable|array','is_read'=>'boolean','read_at'=>'nullable|date'
         ]);
-
-        $notification = Notification::create($validated);
-        $notification->load('student');
-        return response()->json($notification, 201);
+        return response()->json(Notification::create($v),201);
     }
-
-    /**
-     * Display the specified resource.
-     */
-    public function show(string $id)
+    public function show(string $id){ return response()->json(Notification::with(['student','smartBin'])->findOrFail($id)); }
+    public function update(Request $request,string $id)
     {
-        $notification = Notification::with('student')->findOrFail($id);
-        return response()->json($notification);
+        $n=Notification::findOrFail($id);
+        $n->update($request->validate([
+            'is_read'=>'sometimes|boolean','read_at'=>'nullable|date',
+            'title'=>'sometimes|string|max:255','message'=>'sometimes|string','data'=>'nullable|array'
+        ]));
+        if($n->is_read && !$n->read_at) $n->update(['read_at'=>now()]);
+        return response()->json($n);
     }
-
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, string $id)
-    {
-        $notification = Notification::findOrFail($id);
-        $validated = $request->validate([
-            'student_id' => 'nullable|exists:students,student_id',
-            'notification_type' => 'string',
-            'title' => 'string',
-            'message' => 'string',
-            'data' => 'nullable|array',
-            'is_read' => 'boolean',
-            'read_at' => 'nullable|date'
-        ]);
-
-        $notification->update($validated);
-        $notification->load('student');
-        return response()->json($notification);
-    }
-
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(string $id)
-    {
-        $notification = Notification::findOrFail($id);
-        $notification->delete();
-        return response()->json(null, 204);
-    }
+    public function destroy(string $id){ Notification::findOrFail($id)->delete(); return response()->json(null,204); }
 }
-

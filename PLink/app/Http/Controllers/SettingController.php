@@ -20,9 +20,6 @@ class SettingController extends Controller
                 'schoolInfo' => [
                     'name' => '', 'address' => '', 'year' => '', 'email' => ''
                 ],
-                'points' => [
-                    'conversion' => 5, 'rejected' => -1, 'invalid' => -2, 'nonPet' => -1, 'custom' => -1
-                ],
                 'notifications' => [
                     'machineFull' => true, 'scannerErrors' => true, 'machineOffline' => true,
                     'maintenance' => true, 'weeklySummary' => false, 'milestones' => true
@@ -33,11 +30,6 @@ class SettingController extends Controller
                 'school_address' => '',
                 'school_year' => '',
                 'school_email' => '',
-                'point_conversion' => 5,
-                'penalty_rejected' => -1,
-                'penalty_invalid' => -2,
-                'penalty_non_pet' => -1,
-                'penalty_custom' => -1,
                 'notify_machine_full' => true,
                 'notify_scanner_errors' => true,
                 'notify_machine_offline' => true,
@@ -55,13 +47,6 @@ class SettingController extends Controller
                 'year' => $settings->school_year,
                 'email' => $settings->school_email,
             ],
-            'points' => [
-                'conversion' => $settings->point_conversion,
-                'rejected' => $settings->penalty_rejected,
-                'invalid' => $settings->penalty_invalid,
-                'nonPet' => $settings->penalty_non_pet,
-                'custom' => $settings->penalty_custom,
-            ],
             'notifications' => [
                 'machineFull' => $settings->notify_machine_full,
                 'scannerErrors' => $settings->notify_scanner_errors,
@@ -76,11 +61,6 @@ class SettingController extends Controller
             'school_address' => $settings->school_address,
             'school_year' => $settings->school_year,
             'school_email' => $settings->school_email,
-            'point_conversion' => $settings->point_conversion,
-            'penalty_rejected' => $settings->penalty_rejected,
-            'penalty_invalid' => $settings->penalty_invalid,
-            'penalty_non_pet' => $settings->penalty_non_pet,
-            'penalty_custom' => $settings->penalty_custom,
             'notify_machine_full' => $settings->notify_machine_full,
             'notify_scanner_errors' => $settings->notify_scanner_errors,
             'notify_machine_offline' => $settings->notify_machine_offline,
@@ -123,25 +103,21 @@ class SettingController extends Controller
 
         // Try to get data from both input() and json()
         $allData = array_merge($request->all(), $request->json()->all());
+        $schoolInfo = $allData['schoolInfo'] ?? [];
+        $notifications = $allData['notifications'] ?? [];
 
         // Support both formats: nested (schoolInfo/points) AND flat
-        $school_name = $allData['school_name'] ?? ($allData['schoolInfo']['name'] ?? null);
-        $school_address = $allData['school_address'] ?? ($allData['schoolInfo']['address'] ?? null);
-        $school_year = $allData['school_year'] ?? ($allData['schoolInfo']['year'] ?? null);
-        $school_email = $allData['school_email'] ?? ($allData['schoolInfo']['email'] ?? null);
+        $school_name = $allData['school_name'] ?? ($schoolInfo['name'] ?? null);
+        $school_address = $allData['school_address'] ?? ($schoolInfo['address'] ?? null);
+        $school_year = $allData['school_year'] ?? ($schoolInfo['year'] ?? null);
+        $school_email = $allData['school_email'] ?? ($schoolInfo['email'] ?? null);
 
-        $point_conversion = $allData['point_conversion'] ?? ($allData['points']['conversion'] ?? 5);
-        $penalty_rejected = $allData['penalty_rejected'] ?? ($allData['points']['rejected'] ?? -1);
-        $penalty_invalid = $allData['penalty_invalid'] ?? ($allData['points']['invalid'] ?? -2);
-        $penalty_non_pet = $allData['penalty_non_pet'] ?? ($allData['points']['nonPet'] ?? -1);
-        $penalty_custom = $allData['penalty_custom'] ?? ($allData['points']['custom'] ?? -1);
-
-        $notify_machine_full = $allData['notify_machine_full'] ?? ($allData['notifications']['machineFull'] ?? true);
-        $notify_scanner_errors = $allData['notify_scanner_errors'] ?? ($allData['notifications']['scannerErrors'] ?? true);
-        $notify_machine_offline = $allData['notify_machine_offline'] ?? ($allData['notifications']['machineOffline'] ?? true);
-        $notify_maintenance = $allData['notify_maintenance'] ?? ($allData['notifications']['maintenance'] ?? true);
-        $notify_weekly_summary = $allData['notify_weekly_summary'] ?? ($allData['notifications']['weeklySummary'] ?? false);
-        $notify_milestones = $allData['notify_milestones'] ?? ($allData['notifications']['milestones'] ?? true);
+        $notify_machine_full = $allData['notify_machine_full'] ?? ($notifications['machineFull'] ?? true);
+        $notify_scanner_errors = $allData['notify_scanner_errors'] ?? ($notifications['scannerErrors'] ?? true);
+        $notify_machine_offline = $allData['notify_machine_offline'] ?? ($notifications['machineOffline'] ?? true);
+        $notify_maintenance = $allData['notify_maintenance'] ?? ($notifications['maintenance'] ?? true);
+        $notify_weekly_summary = $allData['notify_weekly_summary'] ?? ($notifications['weeklySummary'] ?? false);
+        $notify_milestones = $allData['notify_milestones'] ?? ($notifications['milestones'] ?? true);
 
         $auto_backup = $allData['auto_backup'] ?? ($allData['autoBackup'] ?? true);
 
@@ -156,7 +132,6 @@ class SettingController extends Controller
 
         Log::info('Final data to save', [
             'school_name' => $school_name,
-            'point_conversion' => $point_conversion,
             'notify_machine_full' => $notify_machine_full
         ]);
 
@@ -165,7 +140,6 @@ class SettingController extends Controller
             ['setting_id' => 1],
             compact(
                 'school_name', 'school_address', 'school_year', 'school_email',
-                'point_conversion', 'penalty_rejected', 'penalty_invalid', 'penalty_non_pet', 'penalty_custom',
                 'notify_machine_full', 'notify_scanner_errors', 'notify_machine_offline',
                 'notify_maintenance', 'notify_weekly_summary', 'notify_milestones',
                 'auto_backup'
@@ -181,4 +155,3 @@ class SettingController extends Controller
         ]);
     }
 }
-

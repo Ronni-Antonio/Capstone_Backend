@@ -1,5 +1,4 @@
 <?php
-
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
@@ -7,70 +6,24 @@ use App\Models\Rewards;
 
 class RewardController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
-    public function index()
-    {
-        return response()->json(Rewards::all());
-    }
-
-    /**
-     * Show the form for creating a new resource.
-     */
-    public function create()
-    {
-        //
-    }
-
-    /**
-     * Store a newly created resource in storage.
-     */
+    public function index(){ return response()->json(Rewards::where('is_active',true)->get()); }
     public function store(Request $request)
     {
-        try {
-            $validated = $request->validate([
-                'reward_name' => 'required|string|max:255',
-                'points_cost' => 'required|integer|min:1',
-                'stock_quantity' => 'required|integer|min:0'
-            ]);
-
-            $reward = Rewards::create($validated);
-            return response()->json($reward, 201);
-        } catch (\Exception $e) {
-            return response()->json(['error' => $e->getMessage()], 500);
-        }
+        $v=$request->validate([
+            'reward_name'=>'required|string|max:255','points_cost'=>'required|integer|min:1',
+            'stock_quantity'=>'required|integer|min:0','is_active'=>'boolean'
+        ]);
+        return response()->json(Rewards::create($v),201);
     }
-
-    /**
-     * Display the specified resource.
-     */
-    public function show(string $id)
+    public function show(string $id){ return response()->json(Rewards::findOrFail($id)); }
+    public function update(Request $request,string $id)
     {
-        //
+        $r=Rewards::findOrFail($id);
+        $r->update($request->validate([
+            'reward_name'=>'sometimes|string|max:255','points_cost'=>'sometimes|integer|min:1',
+            'stock_quantity'=>'sometimes|integer|min:0','is_active'=>'sometimes|boolean'
+        ]));
+        return response()->json($r);
     }
-
-    /**
-     * Show the form for editing the specified resource.
-     */
-    public function edit(string $id)
-    {
-        //
-    }
-
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, string $id)
-    {
-        //
-    }
-
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(string $id)
-    {
-        //
-    }
+    public function destroy(string $id){ $r=Rewards::findOrFail($id); if($r->redemptions()->exists()) return response()->json(['error'=>'Reward has redemption history. Deactivate it instead.'],409); $r->delete(); return response()->json(null,204); }
 }
