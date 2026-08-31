@@ -22,3 +22,10 @@
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# Python Prophet service
+/ml_service/venv/
+/ml_service/__pycache__/
+/ml_service/*.pyc
+/ml_service/saved_models/*
+!/ml_service/saved_models/.gitkeep

@@ -1,0 +1,1 @@
+* * * * * ubuntu cd /var/www/plink-backend/PLink && /usr/bin/php artisan schedule:run >> /dev/null 2>&1

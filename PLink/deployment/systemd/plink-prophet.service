@@ -1,0 +1,16 @@
+[Unit]
+Description=PLink Prophet Forecasting API
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/var/www/plink-backend/PLink/ml_service
+ExecStart=/var/www/plink-backend/PLink/ml_service/venv/bin/gunicorn --workers 1 --threads 2 --timeout 120 --bind 127.0.0.1:5001 prophet_api:app
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
