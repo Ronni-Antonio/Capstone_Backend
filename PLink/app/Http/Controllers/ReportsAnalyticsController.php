@@ -38,7 +38,12 @@ class ReportsAnalyticsController extends Controller
             'total_students_participated' => $payload['summary']['participating_students'],
             'summary' => [
                 'waste_types' => $payload['waste_types'],
-                'top_sections' => array_slice($payload['section_performance'], 0, 3),
+                'top_sections' => collect(
+                    $payload['section_performance']
+                )
+                    ->take(3)
+                    ->values()
+                    ->all(),
                 'top_recyclers' => $payload['top_recyclers'],
                 'current_compartments' => $payload['compartments']['current'],
             ],
@@ -111,7 +116,7 @@ class ReportsAnalyticsController extends Controller
             ->groupByRaw('DATE(started_at)')
             ->orderBy('ds')
             ->get()
-            ->map(fn ($row) => [
+            ->map(fn($row) => [
                 'ds' => $row->ds,
                 'items' => (int) $row->items,
                 'points' => (int) $row->points,
@@ -127,7 +132,7 @@ class ReportsAnalyticsController extends Controller
             ->groupByRaw('DATE(started_at)')
             ->orderBy('ds')
             ->get()
-            ->map(fn ($row) => [
+            ->map(fn($row) => [
                 'ds' => $row->ds,
                 'students' => (int) $row->students,
             ])
@@ -151,7 +156,7 @@ class ReportsAnalyticsController extends Controller
             ->groupBy('rt.recyclable_type_id', 'rt.code', 'rt.name', 'rt.material_category')
             ->orderByDesc('total_items')
             ->get()
-            ->map(fn ($row) => [
+            ->map(fn($row) => [
                 'recyclable_type_id' => (int) $row->recyclable_type_id,
                 'code' => $row->code,
                 'name' => $row->name,
@@ -175,7 +180,7 @@ class ReportsAnalyticsController extends Controller
             ->groupBy('sec.section_id', 'sec.name')
             ->orderByDesc('total_items')
             ->get()
-            ->map(fn ($row) => [
+            ->map(fn($row) => [
                 'section_id' => (int) $row->section_id,
                 'name' => $row->name,
                 'total_items' => (int) $row->total_items,
@@ -198,7 +203,7 @@ class ReportsAnalyticsController extends Controller
             ->orderByDesc('items_recycled')
             ->limit(5)
             ->get()
-            ->map(fn ($row) => [
+            ->map(fn($row) => [
                 'student_id' => (int) $row->student_id,
                 'name' => trim($row->first_name . ' ' . $row->last_name),
                 'points_earned' => (int) $row->points_earned,
@@ -214,7 +219,7 @@ class ReportsAnalyticsController extends Controller
             ->groupByRaw('DATE(redeemed_at)')
             ->orderBy('ds')
             ->get()
-            ->map(fn ($row) => [
+            ->map(fn($row) => [
                 'ds' => $row->ds,
                 'redemptions' => (int) $row->redemptions,
             ])
@@ -230,7 +235,7 @@ class ReportsAnalyticsController extends Controller
             ->orderByDesc('redemptions')
             ->limit(8)
             ->get()
-            ->map(fn ($row) => [
+            ->map(fn($row) => [
                 'reward_id' => (int) $row->reward_id,
                 'name' => $row->reward_name,
                 'redemptions' => (int) $row->redemptions,
@@ -242,7 +247,7 @@ class ReportsAnalyticsController extends Controller
             ->orderBy('smart_bin_id')
             ->orderBy('compartment_id')
             ->get()
-            ->map(fn ($compartment) => [
+            ->map(fn($compartment) => [
                 'compartment_id' => $compartment->compartment_id,
                 'smart_bin_id' => $compartment->smart_bin_id,
                 'bin_name' => optional($compartment->smartBin)->name,
@@ -264,7 +269,7 @@ class ReportsAnalyticsController extends Controller
             ->orderBy('ds')
             ->get()
             ->groupBy('material_category')
-            ->map(fn ($rows) => $rows->map(fn ($row) => [
+            ->map(fn($rows) => $rows->map(fn($row) => [
                 'ds' => $row->ds,
                 'fill_percentage' => round((float) $row->fill_percentage, 1),
             ])->values())
@@ -309,23 +314,23 @@ class ReportsAnalyticsController extends Controller
             'recycling_volume' => [
                 'title' => 'Recycling Volume',
                 'unit' => 'items',
-                'history' => array_map(fn ($row) => ['ds' => $row['ds'], 'y' => $row['items']], $dailyCollection),
+                'history' => array_map(fn($row) => ['ds' => $row['ds'], 'y' => $row['items']], $dailyCollection),
             ],
             'student_participation' => [
                 'title' => 'Student Participation',
                 'unit' => 'students',
-                'history' => array_map(fn ($row) => ['ds' => $row['ds'], 'y' => $row['students']], $participationTrend),
+                'history' => array_map(fn($row) => ['ds' => $row['ds'], 'y' => $row['students']], $participationTrend),
             ],
             'reward_redemptions' => [
                 'title' => 'Reward Redemptions',
                 'unit' => 'redemptions',
-                'history' => array_map(fn ($row) => ['ds' => $row['ds'], 'y' => $row['redemptions']], $rewardTrend),
+                'history' => array_map(fn($row) => ['ds' => $row['ds'], 'y' => $row['redemptions']], $rewardTrend),
             ],
             'plastic_fullness' => [
                 'title' => 'Plastic Compartment Fullness',
                 'unit' => '%',
                 'history' => array_map(
-                    fn ($row) => ['ds' => $row['ds'], 'y' => $row['fill_percentage']],
+                    fn($row) => ['ds' => $row['ds'], 'y' => $row['fill_percentage']],
                     $compartmentHistory['plastic'] ?? []
                 ),
             ],
@@ -333,7 +338,7 @@ class ReportsAnalyticsController extends Controller
                 'title' => 'Paper Compartment Fullness',
                 'unit' => '%',
                 'history' => array_map(
-                    fn ($row) => ['ds' => $row['ds'], 'y' => $row['fill_percentage']],
+                    fn($row) => ['ds' => $row['ds'], 'y' => $row['fill_percentage']],
                     $compartmentHistory['paper'] ?? []
                 ),
             ],
@@ -353,11 +358,11 @@ class ReportsAnalyticsController extends Controller
             $latestPredictionDate = optional($records->first())->prediction_date?->toDateString();
 
             $latest = $latestPredictionDate
-                ? $records->filter(fn ($record) => $record->prediction_date?->toDateString() === $latestPredictionDate)
+                ? $records->filter(fn($record) => $record->prediction_date?->toDateString() === $latestPredictionDate)
                 : collect();
 
             $definition['forecast_generated_at'] = $latestPredictionDate;
-            $definition['forecast'] = $latest->map(fn ($record) => [
+            $definition['forecast'] = $latest->map(fn($record) => [
                 'ds' => optional($record->target_date)->toDateString(),
                 'yhat' => round((float) $record->predicted_value, 2),
                 'yhat_lower' => isset($record->output['yhat_lower']) ? round((float) $record->output['yhat_lower'], 2) : null,
