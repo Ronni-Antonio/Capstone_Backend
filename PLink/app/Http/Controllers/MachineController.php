@@ -5,6 +5,7 @@ use App\Models\Notification;
 use App\Models\SmartBin;
 use App\Models\SmartBinCompartment;
 use App\Models\SmartBinCompartmentLog;
+use App\Models\ActivityLog;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -157,6 +158,16 @@ class MachineController extends Controller
         }
 
         $bin = SmartBin::create($validated);
+
+        ActivityLog::record(
+            'ADD_MACHINE',
+            "Smart bin/machine \"{$bin->name}\" was added at {$bin->location}.",
+            'Machine',
+            $request->user()?->id,
+            null,
+            ['smart_bin_id' => $bin->smart_bin_id, 'name' => $bin->name, 'location' => $bin->location]
+        );
+
         return response()->json($bin, 201);
     }
 
@@ -179,7 +190,28 @@ class MachineController extends Controller
             'last_active_at' => 'nullable|date',
         ]);
 
+        $oldName = $bin->name;
+        $oldLocation = $bin->location;
+        $oldStatus = $bin->status;
+
         $bin->update($validated);
+
+        $changes = [];
+        if ($oldName !== $bin->name) $changes[] = "name: '{$oldName}' → '{$bin->name}'";
+        if ($oldLocation !== $bin->location) $changes[] = "location: '{$oldLocation}' → '{$bin->location}'";
+        if ($oldStatus !== $bin->status) $changes[] = "status: '{$oldStatus}' → '{$bin->status}'";
+
+        if (!empty($changes)) {
+            ActivityLog::record(
+                'UPDATE_MACHINE',
+                "Smart bin/machine \"{$bin->name}\" was updated. " . implode(', ', $changes),
+                'Machine',
+                $request->user()?->id,
+                null,
+                ['smart_bin_id' => $bin->smart_bin_id, 'changes' => $changes]
+            );
+        }
+
         return response()->json($bin->fresh('compartments'));
     }
 
@@ -285,7 +317,20 @@ class MachineController extends Controller
             ], 409);
         }
 
+        $binName = $bin->name;
+        $binLocation = $bin->location;
+        $binId = $bin->smart_bin_id;
         $bin->delete();
+
+        ActivityLog::record(
+            'DELETE_MACHINE',
+            "Smart bin/machine \"{$binName}\" at {$binLocation} was deleted.",
+            'Machine',
+            request()->user()?->id,
+            null,
+            ['smart_bin_id' => $binId, 'name' => $binName, 'location' => $binLocation]
+        );
+
         return response()->json(null, 204);
     }
 
