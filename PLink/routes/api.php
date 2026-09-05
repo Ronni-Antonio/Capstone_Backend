@@ -22,6 +22,7 @@ use App\Http\Controllers\PredictionController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ProphetController;
 use App\Http\Controllers\ReportsAnalyticsController;
+use App\Http\Controllers\ActivityLogController;
 
 Route::get('/user', fn(Request $request) => $request->user())->middleware('auth:sanctum');
 
@@ -31,6 +32,8 @@ Route::post('auth/logout', [AuthController::class, 'logout'])->middleware('auth:
 // Lightweight initial dashboard payload.
 Route::get('dashboard', [DashboardController::class, 'index']);
 Route::get('reports-analytics', [ReportsAnalyticsController::class, 'index']);
+
+Route::get('logs', [ActivityLogController::class, 'index']);
 Route::get('reports-analytics/pdf', [ReportsAnalyticsController::class, 'pdf']);
 Route::get('prophet/status', [ProphetController::class, 'status']);
 Route::get('prophet/models', [ProphetController::class, 'models']);

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Models\ActivityLog;
 use App\Models\EmailChangeOtp;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -34,13 +35,32 @@ class userController extends Controller
      */
     public function store(Request $request)
     {
-        $user = User::create([
-            "name" => $request->name,
-            "email" => $request->email,
-            "password" => Hash::make($request->password),
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'email' => 'required|string|email|max:255|unique:users,email',
+            'password' => 'required|string|min:8',
+            'phone' => 'nullable|string|max:255',
+            'school' => 'nullable|string|max:255',
+            'role' => 'nullable|string|max:255',
         ]);
 
-        return response()->json(["id" => $user->id, "name" => $user->name, "email" => $user->email]);
+        $user = User::create([
+            "name" => $validated['name'],
+            "email" => $validated['email'],
+            "password" => Hash::make($validated['password']),
+            "phone" => $validated['phone'] ?? null,
+            "school" => $validated['school'] ?? null,
+            "role" => $validated['role'] ?? null,
+        ]);
+
+        ActivityLog::record(
+            'CREATE_USER',
+            "Admin user account created: {$user->name} ({$user->email}).",
+            'Users',
+            auth()->id()
+        );
+
+        return response()->json(["id" => $user->id, "name" => $user->name, "email" => $user->email], 201);
     }
 
     /**
@@ -82,6 +102,12 @@ class userController extends Controller
         if (!$user) {
             return response()->json(["message" => "User not found"], 404);
         }
+
+        $oldName = $user->name;
+        $oldEmail = $user->email;
+        $oldPhone = $user->phone;
+        $oldSchool = $user->school;
+        $oldRole = $user->role;
         
         $user->name = $request->fullname ?? $request->name;
         $user->email = $request->email;
@@ -95,6 +121,24 @@ class userController extends Controller
         if ($request->has('role'))   $user->role = $request->role;
         
         $user->save();
+
+        $changes = [];
+        if ($oldName !== $user->name) $changes[] = "name from '{$oldName}' to '{$user->name}'";
+        if ($oldEmail !== $user->email) $changes[] = "email from '{$oldEmail}' to '{$user->email}'";
+        if ($oldPhone !== $user->phone) $changes[] = "phone from '{$oldPhone}' to '{$user->phone}'";
+        if ($oldSchool !== $user->school) $changes[] = "school from '{$oldSchool}' to '{$user->school}'";
+        if ($oldRole !== $user->role) $changes[] = "role from '{$oldRole}' to '{$user->role}'";
+
+        if (!empty($changes)) {
+            ActivityLog::record(
+                'UPDATE_USER',
+                "Admin user account updated ({$user->name}): " . implode(', ', $changes) . ".",
+                'Users',
+                auth()->id() ?? $user->id,
+                null,
+                ['changes' => $changes]
+            );
+        }
 
         return response()->json([
             "success" => true,
@@ -127,6 +171,13 @@ class userController extends Controller
 
         $user->password = Hash::make($request->newPass);
         $user->save();
+
+        ActivityLog::record(
+            'PASSWORD_UPDATED',
+            "Admin user account password updated: {$user->name} ({$user->email}).",
+            'Users',
+            auth()->id() ?? $user->id
+        );
 
         return response()->json([
             "success" => true,
@@ -254,7 +305,20 @@ class userController extends Controller
      */
     public function destroy(string $id)
     {
-        User::destroy($id);
+        $user = User::find($id);
+        if ($user) {
+            $name = $user->name;
+            $email = $user->email;
+            User::destroy($id);
+            ActivityLog::record(
+                'DELETE_USER',
+                "Admin user account deleted: {$name} ({$email}).",
+                'Users',
+                auth()->id()
+            );
+        } else {
+            User::destroy($id);
+        }
         return response()->json(["message" => "User deleted successfully"]);
     }
 }

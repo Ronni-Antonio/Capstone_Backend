@@ -1,6 +1,7 @@
 <?php
 namespace App\Http\Controllers;
 
+use App\Models\ActivityLog;
 use App\Models\RecyclingTransaction;
 use App\Models\RecyclingItem;
 use App\Models\AiClassification;
@@ -195,8 +196,39 @@ class TransactionController extends Controller
                 $student->increment('points_balance',$totalPoints);
             }
 
-            return ['already_completed'=>false,'transaction'=>$tx->load('student','rfidCard','smartBin','items.classification.plasticType')];
+            return [
+                'already_completed'=>false,
+                'transaction'=>$tx->load('student','rfidCard','smartBin','items.classification.plasticType'),
+                'student'=>$student,
+                'itemsCount'=>$items->count(),
+                'totalPoints'=>$totalPoints,
+            ];
         });
+
+        if (empty($result['already_completed'])) {
+            $student = $result['student'];
+            $studentName = trim(($student->first_name ?? '') . ' ' . ($student->last_name ?? '')) ?: 'Student';
+            $itemsCount = $result['itemsCount'];
+            $totalPoints = $result['totalPoints'];
+
+            ActivityLog::record(
+                'PLASTIC_SCANNED',
+                "Student {$studentName} completed recycling {$itemsCount} plastic/bottle item(s) via smart bin.",
+                'Machine',
+                null,
+                $student->student_id
+            );
+
+            if ($totalPoints > 0) {
+                ActivityLog::record(
+                    'POINTS_ADDED',
+                    "{$studentName} earned {$totalPoints} points from recycling.",
+                    'Points',
+                    null,
+                    $student->student_id
+                );
+            }
+        }
 
         return response()->json(['success'=>true]+$result,200);
     }
