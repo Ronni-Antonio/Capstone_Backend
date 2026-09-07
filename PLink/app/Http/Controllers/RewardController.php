@@ -54,6 +54,37 @@ class RewardController extends Controller
         return response()->json($reward, 201);
     }
 
+    public function inventory()
+    {
+        $rows = Rewards::query()
+            ->orderBy('reward_name')
+            ->get()
+            ->map(function (Rewards $reward) {
+                $unitPrice = (float) ($reward->unit_price ?? 0);
+                $stock = (int) $reward->stock_quantity;
+
+                return [
+                    'reward_id' => $reward->reward_id,
+                    'reward_name' => $reward->reward_name,
+                    'points_cost' => (int) $reward->points_cost,
+                    'points_value' => (int) $reward->points_cost,
+                    'item_price' => $unitPrice,
+                    'unit_price' => $unitPrice,
+                    'remaining_stocks' => $stock,
+                    'stock_quantity' => $stock,
+                    'total_stocks_on_hand' => $stock,
+                    'total_price' => round($stock * $unitPrice, 2),
+                    'last_restock' => optional($reward->last_restock)->toIso8601String(),
+                    'is_active' => (bool) $reward->is_active,
+                    'status' => $reward->is_active ? 'Active' : 'Inactive',
+                    'created_at' => optional($reward->created_at)->toIso8601String(),
+                    'updated_at' => optional($reward->updated_at)->toIso8601String(),
+                ];
+            });
+
+        return response()->json($rows);
+    }
+
     public function show(string $id)
     {
         return response()->json(Rewards::findOrFail($id));
