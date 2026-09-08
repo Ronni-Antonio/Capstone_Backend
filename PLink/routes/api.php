@@ -23,6 +23,8 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ProphetController;
 use App\Http\Controllers\ReportsAnalyticsController;
 use App\Http\Controllers\ActivityLogController;
+use App\Http\Controllers\IotDeviceConfigController;
+use App\Http\Controllers\IotControllerCommandController;
 
 Route::get('/user', fn(Request $request) => $request->user())->middleware('auth:sanctum');
 
@@ -80,7 +82,23 @@ Route::post('iot/transactions/{transactionCode}/classifications', [TransactionCo
 Route::post('iot/transactions/{transactionCode}/rfid', [TransactionController::class, 'completeWithRfid']);
 Route::delete('transactions/{id}', [TransactionController::class, 'destroy']);
 
+// IoT controller Wi-Fi configuration.
+// Admin routes require the logged-in Sanctum token.
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('iot-device-configs', [IotDeviceConfigController::class, 'index']);
+    Route::put('iot-device-configs/{controllerCode}', [IotDeviceConfigController::class, 'update']);
+});
+
+// Device-facing routes authenticate using X-Device-Key.
+Route::get('iot/device-config/{controllerCode}', [IotDeviceConfigController::class, 'showForDevice']);
+Route::post('iot/device-config/{controllerCode}/ack', [IotDeviceConfigController::class, 'acknowledge']);
+
+// ESP32 outbound command queue. No inbound connection to the ESP32 is required.
+Route::get('iot/controller-commands/{controllerCode}/next', [IotControllerCommandController::class, 'next']);
+Route::post('iot/controller-commands/{controllerCode}/{commandId}/ack', [IotControllerCommandController::class, 'acknowledge']);
+
 Route::resource('plastictypes', PlasticTypeController::class)->except(['create', 'edit']);
+Route::get('rewards/inventory', [RewardController::class, 'inventory']);
 Route::resource('rewards', RewardController::class)->except(['create', 'edit']);
 
 Route::get('redemptions/initiate/{student_id}/{reward_id}/status', [RedemptionController::class, 'checkRedemptionStatus']);

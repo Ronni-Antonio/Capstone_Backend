@@ -8,14 +8,33 @@ use Illuminate\Support\Facades\DB;
 
 class SectionController extends Controller
 {
-    public function index()
+    private function sectionRows()
     {
-        return response()->json(Section::withCount('students')->get()->map(fn($s)=>[
-            'section_id'=>$s->section_id,'name'=>$s->name,'students'=>$s->students_count
-        ]));
+        // Select first, then apply withCount so the generated students_count
+        // subquery is not lost by a later get([...]) column override.
+        return Section::query()
+            ->select(['section_id', 'name'])
+            ->withCount('students')
+            ->orderBy('name')
+            ->get()
+            ->map(fn ($section) => [
+                'section_id' => (int) $section->section_id,
+                'name' => $section->name,
+                'students' => (int) ($section->students_count ?? 0),
+                'student_count' => (int) ($section->students_count ?? 0),
+                'students_count' => (int) ($section->students_count ?? 0),
+            ]);
     }
 
-    public function list(){ return response()->json(Section::orderBy('name')->get(['section_id','name'])); }
+    public function index()
+    {
+        return response()->json($this->sectionRows());
+    }
+
+    public function list()
+    {
+        return response()->json($this->sectionRows());
+    }
 
     public function store(Request $request)
     {

@@ -40,4 +40,10 @@ return [
     'prophet' => [
         'url' => env('PROPHET_API_URL', 'http://127.0.0.1:5001'),
     ],
+
+    'iot' => [
+        'controller_1_key' => env('IOT_CONTROLLER_1_KEY'),
+        'controller_2_key' => env('IOT_CONTROLLER_2_KEY'),
+    ],
+
 ];

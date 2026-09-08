@@ -216,7 +216,7 @@ class DatabaseSeeder extends Seeder
         $recyclableTypes['CONTAMINATED'] = RecyclableType::updateOrCreate(
             ['code' => 'CONTAMINATED'],
             [
-                'name' => 'Contaminated PET Bottle',
+                'name' => 'Dirty / Damaged Recyclable Material',
                 'material_category' => 'plastic',
                 'points_value' => 1,
                 'is_accepted' => true,
@@ -725,7 +725,6 @@ class DatabaseSeeder extends Seeder
                 'report_date_start' => now()->subDays(29)->toDateString(),
                 'report_date_end' => now()->toDateString(),
                 'total_items_collected' => $totalItems,
-                'total_weight_kg' => 0,
                 'total_points_awarded' => $totalPoints,
                 'total_rewards_redeemed' => 0,
                 'total_students_participated' => $studentsParticipated,

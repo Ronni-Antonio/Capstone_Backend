@@ -7,9 +7,11 @@ use App\Models\Rewards;
 use App\Models\Redemptions;
 use App\Models\PointTransaction;
 use App\Models\ActivityLog;
+use App\Services\IotCommandService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class RedemptionController extends Controller
 {
@@ -38,7 +40,13 @@ class RedemptionController extends Controller
             $total=0;
             foreach($counts as $rid=>$qty){
                 $r=$rewards->get($rid);
-                if(!$r || $r->stock_quantity<$qty) throw new \RuntimeException("Insufficient stock for reward {$rid}.");
+                if(!$r) throw new \RuntimeException("Reward {$rid} was not found.");
+                if(!$r->is_active) {
+                    throw ValidationException::withMessages([
+                        'reward_id' => ["Reward \"{$r->reward_name}\" is currently deactivated and cannot be claimed."],
+                    ]);
+                }
+                if($r->stock_quantity<$qty) throw new \RuntimeException("Insufficient stock for reward {$rid}.");
                 $total += $r->points_cost*$qty;
             }
             if($student->points_balance<$total) throw new \RuntimeException('Insufficient points balance.');
@@ -98,11 +106,37 @@ class RedemptionController extends Controller
             'redemptions'=>collect($result[2])->load('reward'),'student'=>$result[3]],201);
     }
 
-    public function initiateRedemptionProcess($student_id,$reward_id)
+    public function initiateRedemptionProcess($student_id, $reward_id, IotCommandService $commands)
     {
-        $student=Students::findOrFail($student_id); $reward=Rewards::findOrFail($reward_id);
-        if($student->points_balance<$reward->points_cost) return response()->json(['error'=>'Insufficient points'],422);
-        return response()->json(['message'=>'Please tap the student RFID card.','student_id'=>$student->student_id,'reward_id'=>$reward->reward_id]);
+        $student = Students::findOrFail($student_id);
+        $reward = Rewards::findOrFail($reward_id);
+
+        if (!$reward->is_active) {
+            return response()->json(['error' => 'This reward is currently deactivated and cannot be claimed.'], 422);
+        }
+
+        if ($student->points_balance < $reward->points_cost) {
+            return response()->json(['error' => 'Insufficient points'], 422);
+        }
+
+        if ($reward->stock_quantity < 1) {
+            return response()->json(['error' => 'This reward is currently out of stock.'], 422);
+        }
+
+        $command = $commands->queue('controller-2', 'confirm_redemption', [
+            'student_id' => (int) $student->student_id,
+            'reward_id' => (int) $reward->reward_id,
+            'reward_name' => $reward->reward_name,
+            'points_cost' => (int) $reward->points_cost,
+        ], 180);
+
+        return response()->json([
+            'message' => 'Redemption confirmation queued. Please tap the student RFID card on Controller 2.',
+            'student_id' => (int) $student->student_id,
+            'reward_id' => (int) $reward->reward_id,
+            'command_id' => (int) $command->command_id,
+            'status' => $command->status,
+        ]);
     }
 
     public function checkRedemptionStatus($student_id,$reward_id)
