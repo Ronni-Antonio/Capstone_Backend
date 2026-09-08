@@ -24,6 +24,7 @@ use App\Http\Controllers\ProphetController;
 use App\Http\Controllers\ReportsAnalyticsController;
 use App\Http\Controllers\ActivityLogController;
 use App\Http\Controllers\IotDeviceConfigController;
+use App\Http\Controllers\IotControllerCommandController;
 
 Route::get('/user', fn(Request $request) => $request->user())->middleware('auth:sanctum');
 
@@ -91,6 +92,10 @@ Route::middleware('auth:sanctum')->group(function () {
 // Device-facing routes authenticate using X-Device-Key.
 Route::get('iot/device-config/{controllerCode}', [IotDeviceConfigController::class, 'showForDevice']);
 Route::post('iot/device-config/{controllerCode}/ack', [IotDeviceConfigController::class, 'acknowledge']);
+
+// ESP32 outbound command queue. No inbound connection to the ESP32 is required.
+Route::get('iot/controller-commands/{controllerCode}/next', [IotControllerCommandController::class, 'next']);
+Route::post('iot/controller-commands/{controllerCode}/{commandId}/ack', [IotControllerCommandController::class, 'acknowledge']);
 
 Route::resource('plastictypes', PlasticTypeController::class)->except(['create', 'edit']);
 Route::get('rewards/inventory', [RewardController::class, 'inventory']);

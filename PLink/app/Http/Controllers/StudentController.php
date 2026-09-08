@@ -6,8 +6,10 @@ use App\Models\GradeLevel;
 use App\Models\Section;
 use App\Models\RfidCard;
 use App\Models\ActivityLog;
+use App\Services\IotCommandService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 
@@ -223,33 +225,51 @@ class StudentController extends Controller
         return response()->json(['status'=>'success','message'=>'Card paired successfully','card'=>$card],201);
     }
 
-    public function activate(string $id)
+    public function activate(string $id, IotCommandService $commands)
     {
-        $student=Students::findOrFail($id);
-        $esp32Url=env('ESP32_URL');
-        if($esp32Url){
-            try {
-                (new \GuzzleHttp\Client())->post(rtrim($esp32Url,'/').'/prepare-activation',[
-                    'json'=>['student_id'=>$student->student_id],
-                    'timeout'=>5
-                ]);
-            } catch(\Throwable $e) {
-                return response()->json(['error'=>'Unable to contact ESP32','details'=>$e->getMessage()],502);
-            }
-        }
-        return response()->json(['message'=>'Please tap card on reader now.']);
+        $student = Students::findOrFail($id);
+
+        $command = $commands->queue('controller-2', 'assign_card', [
+            'student_id' => (int) $student->student_id,
+            'student_number' => $student->student_number,
+            'student_name' => trim(($student->first_name ?? '') . ' ' . ($student->last_name ?? '')),
+        ], 180);
+
+        return response()->json([
+            'message' => 'RFID assignment queued. Please tap the student card on Controller 2.',
+            'student_id' => (int) $student->student_id,
+            'command_id' => (int) $command->command_id,
+            'status' => $command->status,
+        ]);
     }
 
     public function activateStatus(string $id)
     {
-        $student=Students::with('rfidCards')->findOrFail($id);
-        $active=$student->rfidCards->contains(fn($card)=>$card->status==='active');
-        return response()->json(['status'=>$active?'success':'pending']);
+        $student = Students::with('rfidCards')->findOrFail($id);
+        $active = $student->rfidCards->contains(fn ($card) => $card->status === 'active');
+
+        $command = \App\Models\IotControllerCommand::query()
+            ->where('controller_code', 'controller-2')
+            ->where('command_type', 'assign_card')
+            ->where('payload->student_id', (int) $student->student_id)
+            ->latest('command_id')
+            ->first();
+
+        return response()->json([
+            'status' => $active ? 'success' : 'pending',
+            'command_status' => $command?->status,
+            'command_id' => $command?->command_id,
+        ]);
     }
 
-    public function cancelActivation(string $id)
+    public function cancelActivation(string $id, IotCommandService $commands)
     {
-        return response()->json(['message'=>'Activation cancelled']);
+        $commands->cancelOutstanding('controller-2', 'assign_card');
+
+        return response()->json([
+            'success' => true,
+            'message' => 'RFID assignment cancelled.',
+        ]);
     }
 
     public function identifyCard(Request $request)
@@ -261,22 +281,42 @@ class StudentController extends Controller
 
         if(!$card) return response()->json(['error'=>'Unrecognized or inactive card.'],404);
 
-        return response()->json([
+        $payload = [
             'success'=>true,
             'student_id'=>$card->student_id,
             'rfid_card_id'=>$card->rfid_card_id,
             'points_balance'=>(int)$card->student->points_balance,
             'student'=>$card->student
-        ]);
+        ];
+
+        // The Rewards/Logs UI polls active-scan-session while waiting for a
+        // physical card tap. Keep the most recent successful identification
+        // briefly in Laravel cache so the browser can observe the ESP32 event.
+        Cache::put('rfid_active_scan_session', $payload, now()->addMinutes(2));
+
+        return response()->json($payload);
     }
 
     public function checkActiveScanSession()
     {
-        return response()->json(['student_found'=>false,'student'=>null]);
+        $payload = Cache::get('rfid_active_scan_session');
+
+        if (!$payload) {
+            return response()->json(['student_found'=>false,'student'=>null]);
+        }
+
+        return response()->json([
+            'student_found' => true,
+            'student' => $payload['student'] ?? null,
+            'student_id' => $payload['student_id'] ?? null,
+            'points_balance' => $payload['points_balance'] ?? 0,
+            'success' => true,
+        ]);
     }
 
     public function clearScanSession()
     {
+        Cache::forget('rfid_active_scan_session');
         return response()->json(['success'=>true]);
     }
 
