@@ -7,6 +7,7 @@ use App\Models\Section;
 use App\Models\RfidCard;
 use App\Models\ActivityLog;
 use App\Services\IotCommandService;
+use App\Services\RecyclingClaimService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
@@ -272,27 +273,47 @@ class StudentController extends Controller
         ]);
     }
 
-    public function identifyCard(Request $request)
+    public function identifyCard(Request $request, RecyclingClaimService $recyclingClaims)
     {
-        $validated=$request->validate(['card_uid'=>'required|string|max:100']);
-        $card=RfidCard::with('student')
-            ->where('card_uid',strtoupper(trim($validated['card_uid'])))
-            ->where('status','active')->first();
+        $validated = $request->validate([
+            'card_uid' => 'required|string|max:100',
+        ]);
 
-        if(!$card) return response()->json(['error'=>'Unrecognized or inactive card.'],404);
+        $card = RfidCard::with(['student.gradeLevel', 'student.section'])
+            ->where('card_uid', strtoupper(trim($validated['card_uid'])))
+            ->where('status', 'active')
+            ->first();
+
+        if (!$card) {
+            return response()->json([
+                'error' => 'Unrecognized or inactive card.',
+            ], 404);
+        }
+
+        // If Controller 1 has a recent waiting-for-RFID recycling session,
+        // this normal RFID tap claims that session and awards the accumulated
+        // points. If there is no pending session, this remains a normal
+        // student identification tap for Rewards and other UI flows.
+        $recyclingClaim = $recyclingClaims->claimLatestForCard($validated['card_uid']);
+
+        $student = $card->student?->fresh(['gradeLevel', 'section', 'rfidCards']);
+        if (!$student) {
+            return response()->json([
+                'error' => 'RFID card has no linked student.',
+            ], 404);
+        }
 
         $payload = [
-            'success'=>true,
-            'student_id'=>$card->student_id,
-            'rfid_card_id'=>$card->rfid_card_id,
-            'points_balance'=>(int)$card->student->points_balance,
-            'student'=>$card->student
+            'success' => true,
+            'student_id' => (int) $student->student_id,
+            'rfid_card_id' => (int) $card->rfid_card_id,
+            'points_balance' => (int) $student->points_balance,
+            'student' => $student,
+            'recycling_claim' => $recyclingClaim,
         ];
 
-        // The Rewards/Logs UI polls active-scan-session while waiting for a
-        // physical card tap. Keep the most recent successful identification
-        // briefly in Laravel cache so the browser can observe the ESP32 event.
-        Cache::put('rfid_active_scan_session', $payload, now()->addMinutes(2));
+        // Keep the existing short-lived web scan session used by the Rewards UI.
+        cache()->put('plink.active_scan_session', $payload, now()->addMinutes(2));
 
         return response()->json($payload);
     }

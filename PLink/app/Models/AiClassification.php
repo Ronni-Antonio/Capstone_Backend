@@ -34,6 +34,12 @@ class AiClassification extends Model
         return $this->belongsTo(RecyclableType::class, 'recyclable_type_id', 'recyclable_type_id');
     }
 
+    // Compatibility alias used by older transaction/report code.
+    public function plasticType(): BelongsTo
+    {
+        return $this->recyclableType();
+    }
+
     public function model(): BelongsTo
     {
         return $this->belongsTo(AiModel::class, 'model_id', 'model_id');
