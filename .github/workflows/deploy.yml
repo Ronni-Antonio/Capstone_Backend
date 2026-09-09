@@ -19,40 +19,74 @@ jobs:
     if: >
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'main'
+
     runs-on: ubuntu-latest
     environment: production
 
     steps:
+      # ============================================================
+      # CHECKOUT
+      # ============================================================
+
       - name: Checkout tested commit
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+
+      # ============================================================
+      # SSH
+      # ============================================================
 
       - name: Configure SSH
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USER: ${{ secrets.EC2_USER }}
           EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+
         run: |
+          set -e
+
           mkdir -p ~/.ssh
+
           printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/ec2_key
+
           chmod 600 ~/.ssh/ec2_key
-          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+
+          ssh-keyscan -T 15 -H "$EC2_HOST" \
+            >> ~/.ssh/known_hosts
+
+      # ============================================================
+      # PREPARE SERVER DIRECTORY
+      # ============================================================
 
       - name: Prepare application directory on EC2
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USER: ${{ secrets.EC2_USER }}
-        run: |
-          ssh -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" '
-            sudo mkdir -p /var/www/plink-backend/PLink &&
-            sudo chown -R "$USER":"$USER" /var/www/plink-backend
-          '
 
-      - name: Upload Laravel and Prophet application to EC2
+        run: |
+          ssh \
+            -i ~/.ssh/ec2_key \
+            "$EC2_USER@$EC2_HOST" '
+              set -e
+
+              sudo mkdir -p \
+                /var/www/plink-backend/PLink
+
+              sudo chown -R \
+                "$USER":"$USER" \
+                /var/www/plink-backend
+            '
+
+      # ============================================================
+      # RSYNC BACKEND
+      # ============================================================
+
+      - name: Upload Laravel, Prophet and CNN application to EC2
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USER: ${{ secrets.EC2_USER }}
+
         run: |
           rsync -az --delete \
             --exclude='.env' \
@@ -62,72 +96,302 @@ jobs:
             --exclude='storage/framework/cache/' \
             --exclude='storage/framework/sessions/' \
             --exclude='storage/framework/views/' \
+            \
             --exclude='ml_service/venv/' \
+            --exclude='ml_service/cnn_venv/' \
             --exclude='ml_service/__pycache__/' \
             --exclude='ml_service/saved_models/' \
+            --exclude='ml_service/models/' \
+            \
             -e "ssh -i ~/.ssh/ec2_key" \
-            PLink/ "$EC2_USER@$EC2_HOST:/var/www/plink-backend/PLink/"
+            PLink/ \
+            "$EC2_USER@$EC2_HOST:/var/www/plink-backend/PLink/"
 
-      - name: Install and deploy Laravel and Prophet on EC2
+      # ============================================================
+      # DEPLOY
+      # ============================================================
+
+      - name: Install and deploy backend services on EC2
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USER: ${{ secrets.EC2_USER }}
+
         run: |
-          ssh -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" '
-            set -e
-            cd /var/www/plink-backend/PLink
+          ssh \
+            -i ~/.ssh/ec2_key \
+            "$EC2_USER@$EC2_HOST" '
 
-            test -f .env || { echo "ERROR: production .env is missing"; exit 1; }
-            command -v python3 >/dev/null || { echo "ERROR: python3 is not installed on EC2"; exit 1; }
+              set -e
 
-            echo "Installing Laravel dependencies..."
-            composer install \
-              --no-dev \
-              --prefer-dist \
-              --optimize-autoloader \
-              --no-interaction \
-              --no-progress
+              APP_DIR="/var/www/plink-backend/PLink"
+              ML_DIR="$APP_DIR/ml_service"
 
-            echo "Running database migrations..."
-            php artisan migrate --force
+              cd "$APP_DIR"
 
-            echo "Refreshing Laravel caches..."
-            php artisan optimize:clear
-            php artisan config:cache
-            php artisan route:cache
-            php artisan view:cache
 
-            echo "Fixing Laravel writable-directory permissions..."
-            sudo chown -R www-data:www-data storage bootstrap/cache
-            sudo chmod -R ug+rwX storage bootstrap/cache
+              # ====================================================
+              # BASIC CHECKS
+              # ====================================================
 
-            echo "Preparing Prophet virtual environment..."
-            cd /var/www/plink-backend/PLink/ml_service
-            if [ ! -x venv/bin/python ]; then
-              python3 -m venv venv
-            fi
-            ./venv/bin/pip install --upgrade pip
-            ./venv/bin/pip install -r requirements.txt
-            mkdir -p saved_models
+              test -f .env || {
+                echo "ERROR: Production .env is missing."
+                exit 1
+              }
 
-            echo "Installing Prophet systemd service..."
-            sudo cp /var/www/plink-backend/PLink/deployment/systemd/plink-prophet.service /etc/systemd/system/plink-prophet.service
-            sudo systemctl daemon-reload
-            sudo systemctl enable plink-prophet
-            sudo systemctl restart plink-prophet
+              command -v php >/dev/null || {
+                echo "ERROR: PHP is not installed."
+                exit 1
+              }
 
-            echo "Installing Laravel scheduler cron entry..."
-            sudo cp /var/www/plink-backend/PLink/deployment/cron/plink-scheduler /etc/cron.d/plink-scheduler
-            sudo chown root:root /etc/cron.d/plink-scheduler
-            sudo chmod 644 /etc/cron.d/plink-scheduler
+              command -v composer >/dev/null || {
+                echo "ERROR: Composer is not installed."
+                exit 1
+              }
 
-            cd /var/www/plink-backend/PLink
-            php artisan queue:restart || true
-            sudo systemctl reload nginx
+              command -v python3 >/dev/null || {
+                echo "ERROR: Python3 is not installed."
+                exit 1
+              }
 
-            echo "Checking Prophet service..."
-            sleep 2
-            curl --fail --silent http://127.0.0.1:5001/health >/dev/null
 
-            echo "Deployment completed successfully."
-          '
+              # ====================================================
+              # LARAVEL
+              # ====================================================
+
+              echo "Installing Laravel dependencies..."
+
+              composer install \
+                --no-dev \
+                --prefer-dist \
+                --optimize-autoloader \
+                --no-interaction \
+                --no-progress
+
+
+              echo "Running database migrations..."
+
+              php artisan migrate --force
+
+
+              # ====================================================
+              # FIX PERMISSIONS BEFORE ARTISAN CACHE COMMANDS
+              # ====================================================
+
+              echo "Fixing Laravel writable directories..."
+
+              sudo mkdir -p \
+                storage/logs \
+                storage/framework/cache \
+                storage/framework/sessions \
+                storage/framework/views \
+                bootstrap/cache
+
+              sudo touch \
+                storage/logs/laravel.log
+
+              sudo chown -R \
+                "$USER":www-data \
+                storage \
+                bootstrap/cache
+
+              sudo find \
+                storage \
+                bootstrap/cache \
+                -type d \
+                -exec chmod 775 {} \;
+
+              sudo find \
+                storage \
+                bootstrap/cache \
+                -type f \
+                -exec chmod 664 {} \;
+
+
+              # ====================================================
+              # LARAVEL CACHE
+              # ====================================================
+
+              echo "Refreshing Laravel caches..."
+
+              php artisan optimize:clear
+              php artisan config:cache
+              php artisan route:cache
+              php artisan view:cache
+
+
+              # ====================================================
+              # PROPHET ENVIRONMENT
+              # ====================================================
+
+              echo "Preparing Prophet virtual environment..."
+
+              cd "$ML_DIR"
+
+              if [ ! -x venv/bin/python ]; then
+                python3 -m venv venv
+              fi
+
+              ./venv/bin/pip install \
+                --upgrade pip
+
+              ./venv/bin/pip install \
+                -r requirements.txt
+
+              mkdir -p saved_models
+
+
+              # ====================================================
+              # CNN ENVIRONMENT
+              # ====================================================
+
+              echo "Preparing CNN virtual environment..."
+
+              if [ ! -x cnn_venv/bin/python ]; then
+                python3 -m venv cnn_venv
+              fi
+
+              ./cnn_venv/bin/pip install \
+                --upgrade pip
+
+              ./cnn_venv/bin/pip install \
+                -r cnn_requirements.txt
+
+              mkdir -p models
+
+
+              # ====================================================
+              # CNN MODEL CHECK
+              # ====================================================
+
+              CNN_MODEL="$ML_DIR/models/bottle_classification_model.keras"
+              CNN_CLASSES="$ML_DIR/models/classnames.json"
+
+              if [ ! -f "$CNN_MODEL" ]; then
+                echo "ERROR: CNN model is missing:"
+                echo "$CNN_MODEL"
+                exit 1
+              fi
+
+              if [ ! -f "$CNN_CLASSES" ]; then
+                echo "ERROR: classnames.json is missing:"
+                echo "$CNN_CLASSES"
+                exit 1
+              fi
+
+
+              # ====================================================
+              # PROPHET SYSTEMD SERVICE
+              # ====================================================
+
+              echo "Installing Prophet service..."
+
+              sudo cp \
+                "$APP_DIR/deployment/systemd/plink-prophet.service" \
+                /etc/systemd/system/plink-prophet.service
+
+
+              # ====================================================
+              # CNN SYSTEMD SERVICE
+              # ====================================================
+
+              echo "Installing CNN service..."
+
+              sudo cp \
+                "$APP_DIR/deployment/plink-cnn.service" \
+                /etc/systemd/system/plink-cnn.service
+
+
+              # ====================================================
+              # SYSTEMD
+              # ====================================================
+
+              sudo systemctl daemon-reload
+
+              sudo systemctl enable \
+                plink-prophet
+
+              sudo systemctl enable \
+                plink-cnn
+
+              sudo systemctl restart \
+                plink-prophet
+
+              sudo systemctl restart \
+                plink-cnn
+
+
+              # ====================================================
+              # LARAVEL SCHEDULER
+              # ====================================================
+
+              echo "Installing Laravel scheduler cron..."
+
+              sudo cp \
+                "$APP_DIR/deployment/cron/plink-scheduler" \
+                /etc/cron.d/plink-scheduler
+
+              sudo chown \
+                root:root \
+                /etc/cron.d/plink-scheduler
+
+              sudo chmod \
+                644 \
+                /etc/cron.d/plink-scheduler
+
+
+              # ====================================================
+              # FINAL LARAVEL / NGINX
+              # ====================================================
+
+              cd "$APP_DIR"
+
+              php artisan queue:restart || true
+
+              sudo systemctl reload nginx
+
+
+              # ====================================================
+              # HEALTH CHECKS
+              # ====================================================
+
+              echo "Waiting for ML services..."
+
+              sleep 5
+
+
+              echo "Checking Prophet service..."
+
+              curl \
+                --fail \
+                --silent \
+                http://127.0.0.1:5001/health \
+                >/dev/null
+
+
+              echo "Prophet is healthy."
+
+
+              echo "Checking CNN service..."
+
+              curl \
+                --fail \
+                --silent \
+                http://127.0.0.1:5002/health \
+                >/dev/null
+
+
+              echo "CNN is healthy."
+
+
+              # ====================================================
+              # LARAVEL ROUTE CHECK
+              # ====================================================
+
+              echo "Checking classification route..."
+
+              php artisan route:list \
+                --path=iot/classify
+
+
+              echo "Deployment completed successfully."
+            '

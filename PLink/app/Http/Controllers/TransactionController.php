@@ -6,7 +6,7 @@ use App\Models\RecyclingTransaction;
 use App\Models\RecyclingItem;
 use App\Models\AiClassification;
 use App\Models\AiModel;
-use App\Models\PlasticType;
+use App\Models\RecyclableType;
 use App\Models\Students;
 use App\Models\RfidCard;
 use App\Models\SmartBin;
@@ -84,7 +84,7 @@ class TransactionController extends Controller
             'item_number'=>'required|integer|min:1',
             'image_path'=>'nullable|string|max:255',
             'weight_kg'=>'nullable|numeric|min:0',
-            'plastic_type_id'=>'nullable|exists:plastic_types,plastic_type_id',
+            'recyclable_type_id'=>'nullable|exists:recyclable_types,recyclable_type_id',
             'model_id'=>'nullable|exists:ai_models,model_id',
             'model_name'=>'nullable|string|max:255',
             'model_version'=>'nullable|string|max:100',
@@ -120,7 +120,7 @@ class TransactionController extends Controller
             AiClassification::updateOrCreate(
                 ['recycling_item_id'=>$item->recycling_item_id],
                 [
-                    'plastic_type_id'=>$validated['plastic_type_id']??null,
+                    'recyclable_type_id'=>$validated['recyclable_type_id']??null,
                     'model_id'=>$modelId,
                     'confidence_score'=>$validated['confidence_score']??null,
                     'status'=>$validated['status'],
@@ -245,7 +245,7 @@ class TransactionController extends Controller
             'smart_bin_id'=>'required|exists:smart_bins,smart_bin_id',
             'bottles'=>'required|array|min:1',
             'bottles.*.item_number'=>'nullable|integer|min:1',
-            'bottles.*.plastic_type_id'=>'nullable|exists:plastic_types,plastic_type_id',
+            'bottles.*.recyclable_type_id'=>'nullable|exists:recyclable_types,recyclable_type_id',
             'bottles.*.status'=>'required|in:valid,invalid,uncertain,rejected,manually_verified',
             'bottles.*.confidence_score'=>'nullable|numeric|min:0|max:100',
             'bottles.*.image_path'=>'nullable|string',

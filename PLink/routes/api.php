@@ -25,6 +25,7 @@ use App\Http\Controllers\ReportsAnalyticsController;
 use App\Http\Controllers\ActivityLogController;
 use App\Http\Controllers\IotDeviceConfigController;
 use App\Http\Controllers\IotControllerCommandController;
+use App\Http\Controllers\IotClassificationController;
 
 Route::get('/user', fn(Request $request) => $request->user())->middleware('auth:sanctum');
 
@@ -81,6 +82,9 @@ Route::post('iot/transactions/start', [TransactionController::class, 'start']);
 Route::post('iot/transactions/{transactionCode}/classifications', [TransactionController::class, 'addClassification']);
 Route::post('iot/transactions/{transactionCode}/rfid', [TransactionController::class, 'completeWithRfid']);
 Route::delete('transactions/{id}', [TransactionController::class, 'destroy']);
+
+// Controller 1 camera/CNN classification.
+Route::post('iot/classify', [IotClassificationController::class, 'classify']);
 
 // IoT controller Wi-Fi configuration.
 // Admin routes require the logged-in Sanctum token.
