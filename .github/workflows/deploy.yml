@@ -153,6 +153,11 @@ jobs:
                 exit 1
               }
 
+              command -v curl >/dev/null || {
+                echo "ERROR: curl is not installed."
+                exit 1
+              }
+
 
               # ====================================================
               # LARAVEL
@@ -241,19 +246,57 @@ jobs:
 
 
               # ====================================================
+              # UV + PYTHON 3.12 FOR CNN
+              # ====================================================
+
+              echo "Checking uv..."
+
+              UV="$HOME/.local/bin/uv"
+
+              if [ ! -x "$UV" ]; then
+                echo "uv is not installed. Installing uv..."
+                curl -LsSf https://astral.sh/uv/install.sh | sh
+              fi
+
+              test -x "$UV" || {
+                echo "ERROR: uv installation failed."
+                exit 1
+              }
+
+              echo "uv version:"
+              "$UV" --version
+
+              echo "Ensuring Python 3.12 is available for CNN..."
+              "$UV" python install 3.12
+
+              # ====================================================
               # CNN ENVIRONMENT
               # ====================================================
 
               echo "Preparing CNN virtual environment..."
 
-              if [ ! -x cnn_venv/bin/python ]; then
-                python3 -m venv cnn_venv
+              CNN_PYTHON_VERSION=""
+
+              if [ -x cnn_venv/bin/python ]; then
+                CNN_PYTHON_VERSION="$(
+                  ./cnn_venv/bin/python -c "import sys; print(str(sys.version_info.major) + chr(46) + str(sys.version_info.minor))"
+                )"
               fi
 
-              ./cnn_venv/bin/pip install \
-                --upgrade pip
+              if [ "$CNN_PYTHON_VERSION" != "3.12" ]; then
+                echo "CNN environment is missing or uses Python $CNN_PYTHON_VERSION."
+                echo "Recreating CNN environment with Python 3.12..."
 
-              ./cnn_venv/bin/pip install \
+                rm -rf cnn_venv
+                "$UV" venv --python 3.12 cnn_venv
+              fi
+
+              echo "CNN Python version:"
+              ./cnn_venv/bin/python --version
+
+              echo "Installing CNN dependencies..."
+              "$UV" pip install \
+                --python ./cnn_venv/bin/python \
                 -r cnn_requirements.txt
 
               mkdir -p models
@@ -277,6 +320,11 @@ jobs:
                 echo "$CNN_CLASSES"
                 exit 1
               fi
+
+              echo "Checking TensorFlow installation..."
+
+              ./cnn_venv/bin/python -c \
+                "import tensorflow as tf; print(tf.__version__)"
 
 
               # ====================================================
@@ -361,24 +409,34 @@ jobs:
 
               echo "Checking Prophet service..."
 
-              curl \
+              if ! curl \
                 --fail \
                 --silent \
                 http://127.0.0.1:5001/health \
-                >/dev/null
+                >/dev/null; then
 
+                echo "ERROR: Prophet health check failed."
+                sudo systemctl status plink-prophet --no-pager || true
+                sudo journalctl -u plink-prophet -n 50 --no-pager || true
+                exit 1
+              fi
 
               echo "Prophet is healthy."
 
 
               echo "Checking CNN service..."
 
-              curl \
+              if ! curl \
                 --fail \
                 --silent \
                 http://127.0.0.1:5002/health \
-                >/dev/null
+                >/dev/null; then
 
+                echo "ERROR: CNN health check failed."
+                sudo systemctl status plink-cnn --no-pager || true
+                sudo journalctl -u plink-cnn -n 100 --no-pager || true
+                exit 1
+              fi
 
               echo "CNN is healthy."
 
