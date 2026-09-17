@@ -8,7 +8,7 @@ class Rewards extends Model
 {
     protected $table='rewards';
     protected $primaryKey='reward_id';
-    protected $fillable=['reward_name','points_cost','unit_price','stock_quantity','is_active','last_restock'];
+    protected $fillable=['reward_name','category','points_cost','unit_price','stock_quantity','is_active','last_restock'];
     protected $casts=[
         'points_cost'=>'integer',
         'unit_price'=>'decimal:2',

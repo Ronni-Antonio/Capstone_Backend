@@ -36,7 +36,6 @@ Route::post('auth/logout', [AuthController::class, 'logout'])->middleware('auth:
 Route::get('dashboard', [DashboardController::class, 'index']);
 Route::get('reports-analytics', [ReportsAnalyticsController::class, 'index']);
 
-Route::get('logs', [ActivityLogController::class, 'index']);
 Route::get('reports-analytics/pdf', [ReportsAnalyticsController::class, 'pdf']);
 Route::get('prophet/status', [ProphetController::class, 'status']);
 Route::get('prophet/models', [ProphetController::class, 'models']);
@@ -102,8 +101,27 @@ Route::get('iot/controller-commands/{controllerCode}/next', [IotControllerComman
 Route::post('iot/controller-commands/{controllerCode}/{commandId}/ack', [IotControllerCommandController::class, 'acknowledge']);
 
 Route::resource('plastictypes', PlasticTypeController::class)->except(['create', 'edit']);
+
+Route::get('logs/statistics', [ActivityLogController::class, 'statistics']);
+Route::get('logs', [ActivityLogController::class, 'index']);
+
+/* Activity logs aliases */
+Route::get('activity-logs/statistics', [ActivityLogController::class, 'statistics']);
+Route::get('activity-logs', [ActivityLogController::class, 'index']);
+
+Route::get('rewards/inventory/categories', [RewardController::class, 'inventoryCategories']);
+Route::get('rewards/inventory/export', [RewardController::class, 'inventoryExport']);
 Route::get('rewards/inventory', [RewardController::class, 'inventory']);
 Route::resource('rewards', RewardController::class)->except(['create', 'edit']);
+
+/*
+|--------------------------------------------------------------------------
+| Inventory aliases (frontend may call /inventory/* or /rewards/inventory/*)
+|--------------------------------------------------------------------------
+*/
+Route::get('inventory/categories', [RewardController::class, 'inventoryCategories']);
+Route::get('inventory/export', [RewardController::class, 'inventoryExport']);
+Route::get('inventory', [RewardController::class, 'inventory']);
 
 Route::get('redemptions/initiate/{student_id}/{reward_id}/status', [RedemptionController::class, 'checkRedemptionStatus']);
 Route::post('redemptions/initiate/{student_id}/{reward_id}', [RedemptionController::class, 'initiateRedemptionProcess']);

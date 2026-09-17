@@ -4,10 +4,10 @@ return [
 
     'paths' => ['api/*', 'sanctum/csrf-cookie'],
     'allowed_methods' => ['*'],
-    'allowed_origins' => ['https://d1v2rn4nvcvtip.cloudfront.net'],
+    'allowed_origins' => ['http://localhost:5173'],
     'allowed_origins_patterns' => [],
     'allowed_headers' => ['*'],
-    'exposed_headers' => [],
+    'exposed_headers' => ['Content-Disposition', 'Content-Type', 'Content-Length'],
     'max_age' => 0,
     'supports_credentials' => false,
 ];
