@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\User;
 use App\Models\ActivityLog;
 use App\Models\EmailChangeOtp;
+use App\Models\PasswordResetOtp;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -298,6 +299,174 @@ class userController extends Controller
             "success" => true,
             "message" => "Email updated successfully! Redirecting to login..."
         ]);
+    }
+
+    /**
+     * STAGE 1: Generate OTP and send to the currently authenticated user's email
+     * POST api/user/change-password/send-otp
+     */
+    public function sendChangePasswordOtp(Request $request)
+    {
+        $user = $request->user();
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User not authenticated.'
+            ], 401);
+        }
+
+        $email = $user->email;
+
+        $otp = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+
+        PasswordResetOtp::where('email', $email)->delete();
+
+        PasswordResetOtp::create([
+            'email' => $email,
+            'otp' => $otp,
+            'expires_at' => now()->addMinutes(15)
+        ]);
+
+        try {
+            Mail::raw("Your OTP for password change is: {$otp}. It will expire in 15 minutes.", function ($message) use ($email) {
+                $message->to($email)
+                        ->subject('Password Change OTP');
+            });
+        } catch (\Exception $e) {
+            Log::error('Failed to send change password OTP: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to send OTP. Please try again later.',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+
+        Log::info("--- CHANGE PASSWORD OTP DISPATCH ---");
+        Log::info("User ID: {$user->id}, Email: {$email}");
+        Log::info("------------------------------------");
+
+        return response()->json([
+            'success' => true,
+            'message' => 'OTP sent successfully to your registered email address.'
+        ], 200);
+    }
+
+    /**
+     * STAGE 2: Verify the OTP for password change
+     * POST api/user/change-password/verify-otp
+     */
+    public function verifyChangePasswordOtp(Request $request)
+    {
+        $user = $request->user();
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User not authenticated.'
+            ], 401);
+        }
+
+        $request->validate([
+            'otp' => 'required|string|size:6'
+        ]);
+
+        $email = $user->email;
+
+        $otpRecord = PasswordResetOtp::where('email', $email)
+            ->where('otp', $request->otp)
+            ->first();
+
+        if (!$otpRecord) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid OTP. Please check and try again.'
+            ], 400);
+        }
+
+        if ($otpRecord->expires_at < now()) {
+            PasswordResetOtp::where('email', $email)->delete();
+            return response()->json([
+                'success' => false,
+                'message' => 'OTP has expired. Please request a new one.'
+            ], 400);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'OTP verified successfully. You may now proceed to change your password.',
+            'verified' => true
+        ], 200);
+    }
+
+    /**
+     * STAGE 3: Complete password change after OTP verification and invalidate all sessions
+     * POST api/user/change-password
+     */
+    public function changePassword(Request $request)
+    {
+        $user = $request->user();
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User not authenticated.'
+            ], 401);
+        }
+
+        $request->validate([
+            'current_password' => 'required',
+            'new_password' => 'required|string|min:8|confirmed',
+            'otp' => 'required|string|size:6'
+        ]);
+
+        $email = $user->email;
+
+        if (!Hash::check($request->current_password, $user->password)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Current password is incorrect.'
+            ], 400);
+        }
+
+        $otpRecord = PasswordResetOtp::where('email', $email)
+            ->where('otp', $request->otp)
+            ->first();
+
+        if (!$otpRecord) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid or unverified OTP. Please verify the OTP first.'
+            ], 400);
+        }
+
+        if ($otpRecord->expires_at < now()) {
+            PasswordResetOtp::where('email', $email)->delete();
+            return response()->json([
+                'success' => false,
+                'message' => 'OTP has expired. Please request a new one and verify it again.'
+            ], 400);
+        }
+
+        $user->password = Hash::make($request->new_password);
+        $user->save();
+
+        $otpRecord->delete();
+
+        ActivityLog::record(
+            'PASSWORD_CHANGED',
+            "User changed their account password: {$user->name} ({$user->email}).",
+            'Users',
+            $user->id
+        );
+
+        $user->tokens()->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Password changed successfully! Please log in again with your new password.',
+            'requires_relogin' => true
+        ], 200);
     }
 
     /**

@@ -25,6 +25,10 @@ class ActivityLogController extends Controller
             $query->where('student_id', $request->input('student_id'));
         }
 
+        if ($request->filled('log_type')) {
+            $query->forLogType((string) $request->input('log_type'));
+        }
+
         if ($request->filled('search')) {
             $term = '%' . trim((string) $request->input('search')) . '%';
             $query->where(function (Builder $q) use ($term) {
@@ -94,6 +98,7 @@ class ActivityLogController extends Controller
                 'action' => $log->action,
                 'description' => $log->description,
                 'module' => $log->module,
+                'log_type' => $log->log_type,
                 'metadata' => $log->metadata,
                 'ip_address' => $log->ip_address,
             ];
@@ -134,6 +139,29 @@ class ActivityLogController extends Controller
             ->pluck('count', 'module')
             ->toArray();
 
+        $categoryCounts = [
+            'redemption' => 0,
+            'user'       => 0,
+            'collection' => 0,
+            'system'     => 0,
+        ];
+
+        $rows = (clone $baseQuery)
+            ->selectRaw('action, module, COUNT(*) as cnt')
+            ->groupBy('action', 'module')
+            ->get();
+
+        foreach ($rows as $row) {
+            $type = ActivityLog::categorize(
+                (string) $row->action,
+                (string) $row->module
+            );
+            if (!isset($categoryCounts[$type])) {
+                $type = 'system';
+            }
+            $categoryCounts[$type] += (int) $row->cnt;
+        }
+
         $added   = 0;
         $updated = 0;
         $deleted = 0;
@@ -173,6 +201,7 @@ class ActivityLogController extends Controller
             + ($actionCounts['UPDATE_STUDENT'] ?? 0)
             + ($actionCounts['DELETE_STUDENT'] ?? 0)
             + ($actionCounts['PASSWORD_UPDATED'] ?? 0)
+            + ($actionCounts['PASSWORD_CHANGED'] ?? 0)
             + ($actionCounts['BULK_IMPORT_STUDENTS'] ?? 0)
             + ($actionCounts['ASSIGN_RFID_CARD'] ?? 0);
 
@@ -207,6 +236,19 @@ class ActivityLogController extends Controller
             'machine_activity'    => $machineActivity,
             'user_management'     => $userManagement,
             'reward_management'   => $rewardManagement,
+
+            'log_types' => [
+                'redemption' => $categoryCounts['redemption'],
+                'user'       => $categoryCounts['user'],
+                'collection' => $categoryCounts['collection'],
+                'system'     => $categoryCounts['system'],
+            ],
+            'category_counts' => [
+                'redemption' => $categoryCounts['redemption'],
+                'user'       => $categoryCounts['user'],
+                'collection' => $categoryCounts['collection'],
+                'system'     => $categoryCounts['system'],
+            ],
 
             'action_breakdown'    => $actionCounts,
             'module_breakdown'    => $moduleCounts,

@@ -48,6 +48,11 @@ Route::post('auth/forgot-password/reset', [\App\Http\Controllers\ForgotPasswordC
 Route::put('users/{id}/password', [userController::class, 'updatePassword']);
 Route::post('user/{id}/request-email-change', [userController::class, 'requestEmailChange']);
 Route::post('user/{id}/verify-email-change', [userController::class, 'verifyEmailChange']);
+
+Route::post('user/change-password/send-otp', [userController::class, 'sendChangePasswordOtp'])->middleware('auth:sanctum');
+Route::post('user/change-password/verify-otp', [userController::class, 'verifyChangePasswordOtp'])->middleware('auth:sanctum');
+Route::post('user/change-password', [userController::class, 'changePassword'])->middleware('auth:sanctum');
+
 Route::resource('users', userController::class);
 
 Route::get('settings', [SettingController::class, 'index']);
@@ -111,6 +116,7 @@ Route::get('activity-logs', [ActivityLogController::class, 'index']);
 
 Route::get('rewards/inventory/categories', [RewardController::class, 'inventoryCategories']);
 Route::get('rewards/inventory/export', [RewardController::class, 'inventoryExport']);
+Route::get('rewards/inventory/pdf-data', [RewardController::class, 'inventoryPdfData']);
 Route::get('rewards/inventory', [RewardController::class, 'inventory']);
 Route::resource('rewards', RewardController::class)->except(['create', 'edit']);
 
@@ -121,6 +127,7 @@ Route::resource('rewards', RewardController::class)->except(['create', 'edit']);
 */
 Route::get('inventory/categories', [RewardController::class, 'inventoryCategories']);
 Route::get('inventory/export', [RewardController::class, 'inventoryExport']);
+Route::get('inventory/pdf-data', [RewardController::class, 'inventoryPdfData']);
 Route::get('inventory', [RewardController::class, 'inventory']);
 
 Route::get('redemptions/initiate/{student_id}/{reward_id}/status', [RedemptionController::class, 'checkRedemptionStatus']);

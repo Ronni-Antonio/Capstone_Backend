@@ -73,7 +73,7 @@ class RewardController extends Controller
             });
         }
 
-        if ($request->filled('category') && strtolower((string) $request->input('category')) !== 'all') {
+        if ($request->filled('category')) {
             $query->where('category', $request->input('category'));
         }
 
@@ -92,12 +92,10 @@ class RewardController extends Controller
 
         $sort = $request->input('sort');
         switch ($sort) {
-            case 'cost_asc':
-                $query->orderBy('unit_price', 'asc');
+            case 'name_desc':
+                $query->orderBy('reward_name', 'desc');
                 break;
-            case 'cost_desc':
-                $query->orderBy('unit_price', 'desc');
-                break;
+            case 'name_asc':
             default:
                 $query->orderBy('reward_name', 'asc');
                 break;
@@ -251,6 +249,68 @@ class RewardController extends Controller
         ];
 
         return response()->streamDownload($stream, $filename, $responseHeaders);
+    }
+
+    public function inventoryPdfData(Request $request)
+    {
+        $query = Rewards::query();
+        $this->applyInventoryFilters($query, $request);
+
+        $rows = $query->get()->map(fn (Rewards $r) => $this->transformInventoryRow($r));
+
+        $totalItems = $rows->count();
+        $totalStocks = $rows->sum('stock_quantity');
+        $totalValue = round($rows->sum('total_price'), 2);
+        $activeCount = $rows->where('is_active', true)->count();
+        $inactiveCount = $totalItems - $activeCount;
+
+        $now = now()->timezone('Asia/Manila');
+
+        return response()->json([
+            'title' => 'Inventory Report',
+            'generated_at' => $now->toIso8601String(),
+            'generated_at_formatted' => $now->format('F d, Y h:i A'),
+            'summary' => [
+                'total_items' => $totalItems,
+                'total_stocks' => $totalStocks,
+                'total_value' => $totalValue,
+                'active_items' => $activeCount,
+                'inactive_items' => $inactiveCount,
+            ],
+            'columns' => [
+                'ID',
+                'Item Name',
+                'Category',
+                'Points Cost',
+                'Unit Price (PHP)',
+                'Stock Quantity',
+                'Total Value (PHP)',
+                'Last Restock',
+                'Status',
+            ],
+            'rows' => $rows->map(function ($r) {
+                return [
+                    'reward_id' => $r['reward_id'],
+                    'reward_name' => $r['reward_name'],
+                    'category' => $r['category'] ?? 'N/A',
+                    'points_cost' => $r['points_cost'],
+                    'unit_price' => $r['unit_price'],
+                    'stock_quantity' => $r['stock_quantity'],
+                    'total_price' => $r['total_price'],
+                    'last_restock' => $r['last_restock']
+                        ? \Carbon\Carbon::parse($r['last_restock'])->timezone('Asia/Manila')->format('F d, Y h:i A')
+                        : 'N/A',
+                    'status' => $r['status'],
+                ];
+            })->values()->all(),
+            'filters' => [
+                'search' => $request->input('search'),
+                'category' => $request->input('category'),
+                'sort' => $request->input('sort'),
+                'dateFrom' => $request->input('dateFrom'),
+                'dateTo' => $request->input('dateTo'),
+            ],
+        ]);
     }
 
     public function show(string $id)
