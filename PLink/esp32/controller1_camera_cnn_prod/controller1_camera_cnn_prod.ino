@@ -6,6 +6,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
+#include <ESP32Servo.h>
 #include <SPI.h>
 #include <MFRC522.h>
 
@@ -26,53 +27,70 @@ static const char* API_BASE =
 static const char* CLASSIFICATION_URL =
     "https://plink-api.barabesta.is/api/iot/classify";
 
-static const char* IDENTIFY_CARD_URL =
-    "https://plink-api.barabesta.is/api/students/identify-card";
-
 // ============================================================
 // FALLBACK WI-FI
 // ============================================================
 
 static const char* FALLBACK_SSID =
-    "GlobeAtHome_38756_2.4";
+    "Roni :3";
 
 static const char* FALLBACK_PASSWORD =
-    "Shinchan215";
+    "p00pyp4nt5";
 
 // ============================================================
-// IR SENSOR
+// CONTROLLER 1 HARDWARE
 // ============================================================
+
 
 #define IR_SENSOR_PIN 42
 #define IR_DETECTED_STATE LOW
 
-const unsigned long CAPTURE_DELAY_MS = 500;
-const unsigned long CAPTURE_COOLDOWN_MS = 3000;
-
-// ============================================================
-// RFID RC522
-// Wiring:
-//   SDA / SS -> GPIO41
-//   SCK      -> GPIO40
-//   MOSI     -> GPIO38
-//   MISO     -> GPIO39
-//   RST      -> GPIO2
-//   3.3V     -> 3.3V
-//   GND      -> GND
-//   IRQ      -> not connected
-// ============================================================
-
+// Existing RC522 wiring from the current hardware diagram.
 #define RFID_SS_PIN   41
+#define RFID_RST_PIN  2
 #define RFID_SCK_PIN  40
 #define RFID_MOSI_PIN 38
 #define RFID_MISO_PIN 39
-#define RFID_RST_PIN   2
 
-const unsigned long RFID_SCAN_COOLDOWN_MS = 1500;
+// HC-SR04 #1: PLASTIC compartment
+#define HC_PLASTIC_TRIG_PIN 1
+#define HC_PLASTIC_ECHO_PIN 3
 
+// HC-SR04 #2: PAPER compartment
+#define HC_PAPER_TRIG_PIN 45
+#define HC_PAPER_ECHO_PIN 46
+
+// Servo signal
+#define SERVO_PIN 47
+
+#define SMART_BIN_ID 1
+
+int plasticCompartmentId = -1;
+int paperCompartmentId = -1;
+
+// Servo positions. Adjust these mechanically after testing.
+const int SERVO_CENTER_ANGLE = 90;
+const int SERVO_PLASTIC_ANGLE = 35;   // LEFT
+const int SERVO_PAPER_ANGLE = 145;    // RIGHT
+
+const unsigned long SERVO_HOLD_MS = 900;
+
+// HC-SR04 settings
+const unsigned long ULTRASONIC_TIMEOUT_US = 30000;
+const unsigned long BIN_SENSOR_INTERVAL_MS = 5000;
+const float MAX_VALID_DISTANCE_CM = 400.0f;
+const int DISTANCE_SAMPLES = 5;
+
+// Fill readings are sent as RAW DISTANCE values.
+// Laravel remains responsible for converting distance -> percentage.
+unsigned long lastBinSensorUpload = 0;
+
+// Hardware objects
 MFRC522 rfid(RFID_SS_PIN, RFID_RST_PIN);
-unsigned long lastRfidScanTime = 0;
-String lastRfidUid = "";
+Servo sorterServo;
+
+const unsigned long CAPTURE_DELAY_MS = 500;
+const unsigned long CAPTURE_COOLDOWN_MS = 3000;
 
 // ============================================================
 // REMOTE CONFIG
@@ -97,8 +115,37 @@ String lastCompartment = "";
 int pendingSessionPoints = 0;
 int pendingSessionItems = 0;
 
+// Existing camera-server helpers from the ESP32 camera example.
 void startCameraServer();
 void setupLedFlash();
+
+// Hardware helpers
+float readUltrasonicDistanceCM(
+    int trigPin,
+    int echoPin
+);
+
+float readStableDistanceCM(
+    int trigPin,
+    int echoPin
+);
+
+void updateBinSensors();
+bool discoverCompartmentIds();
+bool uploadCompartmentDistance(
+    const char* compartmentCode,
+    float distanceCm
+);
+
+void routeClassifiedItem(
+    const String& compartment
+);
+
+void moveSorterServo(
+    int angle
+);
+
+void printRFIDDiagnostic();
 
 // ============================================================
 // HTTPS HELPER
@@ -384,164 +431,6 @@ void checkRemoteConfiguration() {
     ESP.restart();
 }
 
-
-// ============================================================
-// RFID RC522
-// ============================================================
-
-String readRfidUid() {
-    if (!rfid.PICC_IsNewCardPresent()) {
-        return "";
-    }
-
-    if (!rfid.PICC_ReadCardSerial()) {
-        return "";
-    }
-
-    String uid = "";
-
-    for (byte i = 0; i < rfid.uid.size; i++) {
-        if (rfid.uid.uidByte[i] < 0x10) {
-            uid += "0";
-        }
-
-        uid += String(rfid.uid.uidByte[i], HEX);
-    }
-
-    uid.toUpperCase();
-
-    rfid.PICC_HaltA();
-    rfid.PCD_StopCrypto1();
-
-    return uid;
-}
-
-bool sendRfidToLaravel(const String& cardUid) {
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("Cannot identify RFID: Wi-Fi disconnected.");
-        return false;
-    }
-
-    WiFiClientSecure client;
-    HTTPClient http;
-
-    if (!beginSecureRequest(client, http, IDENTIFY_CARD_URL)) {
-        Serial.println("Could not initialize RFID HTTPS request.");
-        return false;
-    }
-
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("Accept", "application/json");
-    http.addHeader("X-Device-Key", DEVICE_KEY);
-    http.addHeader("X-Controller-Code", CONTROLLER_CODE);
-
-    JsonDocument requestDoc;
-    requestDoc["card_uid"] = cardUid;
-
-    String requestBody;
-    serializeJson(requestDoc, requestBody);
-
-    int responseCode = http.POST(requestBody);
-    String responseBody = responseCode > 0 ? http.getString() : "";
-
-    Serial.printf("RFID HTTP %d\n", responseCode);
-
-    if (!isHttpSuccess(responseCode)) {
-        Serial.println("RFID backend response:");
-        Serial.println(responseBody);
-        http.end();
-        return false;
-    }
-
-    JsonDocument responseDoc;
-    DeserializationError error = deserializeJson(responseDoc, responseBody);
-
-    if (error) {
-        Serial.print("RFID response JSON error: ");
-        Serial.println(error.c_str());
-        http.end();
-        return false;
-    }
-
-    String firstName = responseDoc["student"]["first_name"] | "";
-    String lastName = responseDoc["student"]["last_name"] | "";
-    String studentName = firstName + " " + lastName;
-    studentName.trim();
-
-    int pointsBalance = responseDoc["points_balance"] | 0;
-
-    Serial.println();
-    Serial.println("============= RFID =============");
-    Serial.print("Card UID: ");
-    Serial.println(cardUid);
-
-    if (studentName.length() > 0) {
-        Serial.print("Student: ");
-        Serial.println(studentName);
-    }
-
-    Serial.print("Current points: ");
-    Serial.println(pointsBalance);
-
-    if (!responseDoc["recycling_claim"].isNull() &&
-        (bool)(responseDoc["recycling_claim"]["claimed"] | false)) {
-
-        int items = responseDoc["recycling_claim"]["items"] | 0;
-        int pointsAwarded = responseDoc["recycling_claim"]["points_awarded"] | 0;
-        int newBalance =
-            responseDoc["recycling_claim"]["new_points_balance"] | pointsBalance;
-
-        Serial.println("Recycling session claimed.");
-        Serial.print("Items claimed: ");
-        Serial.println(items);
-        Serial.print("Points awarded: ");
-        Serial.println(pointsAwarded);
-        Serial.print("New balance: ");
-        Serial.println(newBalance);
-
-        pendingSessionItems = 0;
-        pendingSessionPoints = 0;
-    } else {
-        Serial.println(
-            "Card identified. No pending recycling session was claimed."
-        );
-    }
-
-    Serial.println("================================");
-
-    http.end();
-    return true;
-}
-
-void handleRfid() {
-    if (classificationInProgress) {
-        return;
-    }
-
-    String uid = readRfidUid();
-
-    if (uid.length() == 0) {
-        return;
-    }
-
-    unsigned long nowMs = millis();
-
-    if (
-        uid == lastRfidUid &&
-        nowMs - lastRfidScanTime < RFID_SCAN_COOLDOWN_MS
-    ) {
-        return;
-    }
-
-    lastRfidUid = uid;
-    lastRfidScanTime = nowMs;
-
-    Serial.println();
-    Serial.println("RFID card detected.");
-
-    sendRfidToLaravel(uid);
-}
-
 // ============================================================
 // CLASSIFICATION RESULT
 // ============================================================
@@ -660,15 +549,442 @@ void handleClassificationResponse(
         "===================================="
     );
 
-    // Hook your segregation hardware here:
-    //
-    // if (compartment == "plastic") {
-    //     moveServoToPlastic();
-    // } else if (compartment == "paper") {
-    //     moveServoToPaper();
-    // } else {
-    //     rejectItem();
-    // }
+    // Physical segregation is controlled from the Laravel mapping.
+    // The CNN only classifies; Laravel decides the mapped compartment.
+    routeClassifiedItem(compartment);
+}
+
+// ============================================================
+// SERVO SORTING
+// ============================================================
+
+void moveSorterServo(int angle) {
+    angle = constrain(angle, 0, 180);
+
+    sorterServo.write(angle);
+
+    Serial.print("Servo angle: ");
+    Serial.println(angle);
+}
+
+void routeClassifiedItem(const String& compartment) {
+    if (compartment == "plastic") {
+        Serial.println("Routing item: PLASTIC -> LEFT");
+
+        moveSorterServo(SERVO_PLASTIC_ANGLE);
+        delay(SERVO_HOLD_MS);
+
+        moveSorterServo(SERVO_CENTER_ANGLE);
+        Serial.println("Sorter returned to CENTER.");
+        return;
+    }
+
+    if (compartment == "paper") {
+        Serial.println("Routing item: WHITE PAPER -> RIGHT");
+
+        moveSorterServo(SERVO_PAPER_ANGLE);
+        delay(SERVO_HOLD_MS);
+
+        moveSorterServo(SERVO_CENTER_ANGLE);
+        Serial.println("Sorter returned to CENTER.");
+        return;
+    }
+
+    Serial.println(
+        "Routing item: REJECT / UNKNOWN -> CENTER"
+    );
+
+    moveSorterServo(SERVO_CENTER_ANGLE);
+}
+
+// ============================================================
+// HC-SR04 DISTANCE
+// ============================================================
+
+float readUltrasonicDistanceCM(
+    int trigPin,
+    int echoPin
+) {
+    digitalWrite(trigPin, LOW);
+    delayMicroseconds(3);
+
+    digitalWrite(trigPin, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(trigPin, LOW);
+
+    unsigned long duration =
+        pulseIn(
+            echoPin,
+            HIGH,
+            ULTRASONIC_TIMEOUT_US
+        );
+
+    if (duration == 0) {
+        return -1.0f;
+    }
+
+    float distanceCm =
+        (duration * 0.0343f) / 2.0f;
+
+    if (
+        distanceCm <= 0.0f ||
+        distanceCm > MAX_VALID_DISTANCE_CM
+    ) {
+        return -1.0f;
+    }
+
+    return distanceCm;
+}
+
+float readStableDistanceCM(
+    int trigPin,
+    int echoPin
+) {
+    float total = 0.0f;
+    int validSamples = 0;
+
+    for (int i = 0; i < DISTANCE_SAMPLES; i++) {
+        float distance =
+            readUltrasonicDistanceCM(
+                trigPin,
+                echoPin
+            );
+
+        if (distance > 0.0f) {
+            total += distance;
+            validSamples++;
+        }
+
+        // Small separation between samples reduces echo interference.
+        delay(60);
+    }
+
+    if (validSamples == 0) {
+        return -1.0f;
+    }
+
+    return total / validSamples;
+}
+
+// ============================================================
+// COMPARTMENT ID DISCOVERY
+// ============================================================
+
+bool discoverCompartmentIds() {
+    if (WiFi.status() != WL_CONNECTED) {
+        return false;
+    }
+
+    WiFiClientSecure client;
+    HTTPClient http;
+
+    String url =
+        String(API_BASE) +
+        "/machines/" +
+        String(SMART_BIN_ID);
+
+    if (!beginSecureRequest(client, http, url)) {
+        Serial.println(
+            "Could not initialize smart-bin discovery request."
+        );
+        return false;
+    }
+
+    http.addHeader(
+        "Accept",
+        "application/json"
+    );
+
+    http.addHeader(
+        "X-Device-Key",
+        DEVICE_KEY
+    );
+
+    int responseCode = http.GET();
+
+    if (!isHttpSuccess(responseCode)) {
+        Serial.printf(
+            "Smart-bin discovery HTTP %d\n",
+            responseCode
+        );
+        Serial.println(http.getString());
+        http.end();
+        return false;
+    }
+
+    String responseBody = http.getString();
+    http.end();
+
+    JsonDocument doc;
+
+    DeserializationError error =
+        deserializeJson(doc, responseBody);
+
+    if (error) {
+        Serial.print(
+            "Smart-bin discovery JSON error: "
+        );
+        Serial.println(error.c_str());
+        return false;
+    }
+
+    plasticCompartmentId = -1;
+    paperCompartmentId = -1;
+
+    JsonArray compartments =
+        doc["compartments"].as<JsonArray>();
+
+    for (JsonObject compartment : compartments) {
+        int id =
+            compartment["compartment_id"] | -1;
+
+        String material =
+            compartment["material_category"] |
+            "";
+
+        material.toLowerCase();
+
+        if (material == "plastic") {
+            plasticCompartmentId = id;
+        } else if (material == "paper") {
+            paperCompartmentId = id;
+        }
+    }
+
+    Serial.print("Plastic compartment ID: ");
+    Serial.println(plasticCompartmentId);
+
+    Serial.print("Paper compartment ID: ");
+    Serial.println(paperCompartmentId);
+
+    return
+        plasticCompartmentId > 0 &&
+        paperCompartmentId > 0;
+}
+
+// ============================================================
+// BIN SENSOR API
+// ============================================================
+
+bool uploadCompartmentDistance(
+    int compartmentId,
+    const char* materialName,
+    float distanceCm
+) {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println(
+            "Cannot upload bin distance: Wi-Fi disconnected."
+        );
+        return false;
+    }
+
+    WiFiClientSecure client;
+    HTTPClient http;
+
+    String url =
+        String(API_BASE) +
+        "/machines/" +
+        String(SMART_BIN_ID) +
+        "/compartments/" +
+        String(compartmentId) +
+        "/sensor";
+
+    if (!beginSecureRequest(client, http, url)) {
+        Serial.println(
+            "Could not initialize bin sensor HTTPS request."
+        );
+        return false;
+    }
+
+    http.addHeader(
+        "Content-Type",
+        "application/json"
+    );
+
+    http.addHeader(
+        "Accept",
+        "application/json"
+    );
+
+    http.addHeader(
+        "X-Device-Key",
+        DEVICE_KEY
+    );
+
+    http.addHeader(
+        "X-Controller-Code",
+        CONTROLLER_CODE
+    );
+
+    JsonDocument requestDoc;
+
+    requestDoc["distance_cm"] = distanceCm;
+
+    String requestBody;
+    serializeJson(requestDoc, requestBody);
+
+    int responseCode =
+        http.PATCH(requestBody);
+
+    String responseBody =
+        http.getString();
+
+    http.end();
+
+    Serial.printf(
+        "Bin sensor [%s] [ID %d]: %.2f cm -> HTTP %d\n",
+        materialName,
+        compartmentId,
+        distanceCm,
+        responseCode
+    );
+
+    if (!isHttpSuccess(responseCode)) {
+        Serial.println(responseBody);
+        return false;
+    }
+
+    // Print the backend-calculated fullness when available.
+    JsonDocument responseDoc;
+
+    if (
+        deserializeJson(
+            responseDoc,
+            responseBody
+        ) == DeserializationError::Ok
+    ) {
+        float fill =
+            responseDoc["data"]["current_fill_percentage"] |
+            responseDoc["current_fill_percentage"] |
+            -1.0f;
+
+        String status =
+            responseDoc["data"]["status"] |
+            responseDoc["status"] |
+            "";
+
+        if (fill >= 0.0f) {
+            Serial.print("  Fill: ");
+            Serial.print(fill, 1);
+            Serial.println("%");
+        }
+
+        if (status.length()) {
+            Serial.print("  Status: ");
+            Serial.println(status);
+        }
+    }
+
+    return true;
+}
+
+void updateBinSensors() {
+    if (WiFi.status() != WL_CONNECTED) {
+        return;
+    }
+
+    if (
+        plasticCompartmentId <= 0 ||
+        paperCompartmentId <= 0
+    ) {
+        if (!discoverCompartmentIds()) {
+            Serial.println(
+                "Cannot upload fullness: compartment IDs were not discovered."
+            );
+            return;
+        }
+    }
+
+    Serial.println();
+    Serial.println("========== BIN FULLNESS ==========");
+
+    // Read PLASTIC first, then PAPER. The sensors are not triggered
+    // simultaneously, which reduces ultrasonic cross-talk.
+    float plasticDistance =
+        readStableDistanceCM(
+            HC_PLASTIC_TRIG_PIN,
+            HC_PLASTIC_ECHO_PIN
+        );
+
+    Serial.print("Plastic distance: ");
+
+    if (plasticDistance < 0.0f) {
+        Serial.println("INVALID / NO ECHO");
+    } else {
+        Serial.print(plasticDistance, 2);
+        Serial.println(" cm");
+
+        uploadCompartmentDistance(
+            plasticCompartmentId,
+            "plastic",
+            plasticDistance
+        );
+    }
+
+    // Allow echoes to settle before using the second sensor.
+    delay(100);
+
+    float paperDistance =
+        readStableDistanceCM(
+            HC_PAPER_TRIG_PIN,
+            HC_PAPER_ECHO_PIN
+        );
+
+    Serial.print("Paper distance: ");
+
+    if (paperDistance < 0.0f) {
+        Serial.println("INVALID / NO ECHO");
+    } else {
+        Serial.print(paperDistance, 2);
+        Serial.println(" cm");
+
+        uploadCompartmentDistance(
+            paperCompartmentId,
+            "paper",
+            paperDistance
+        );
+    }
+
+    Serial.println("==================================");
+}
+
+// ============================================================
+// RFID DIAGNOSTIC
+// ============================================================
+// Controller 2 remains responsible for student identification and
+// reward claiming. Controller 1 only initializes the RC522 and can
+// report a UID for wiring diagnostics.
+
+void printRFIDDiagnostic() {
+    if (!rfid.PICC_IsNewCardPresent()) {
+        return;
+    }
+
+    if (!rfid.PICC_ReadCardSerial()) {
+        return;
+    }
+
+    Serial.print("Controller 1 RFID detected UID: ");
+
+    for (byte i = 0; i < rfid.uid.size; i++) {
+        if (rfid.uid.uidByte[i] < 0x10) {
+            Serial.print("0");
+        }
+
+        Serial.print(
+            rfid.uid.uidByte[i],
+            HEX
+        );
+
+        if (i + 1 < rfid.uid.size) {
+            Serial.print(":");
+        }
+    }
+
+    Serial.println();
+
+    rfid.PICC_HaltA();
+    rfid.PCD_StopCrypto1();
 }
 
 // ============================================================
@@ -919,36 +1235,6 @@ bool initializeCamera() {
 }
 
 // ============================================================
-// RFID INITIALIZATION
-// ============================================================
-
-void initializeRfid() {
-    SPI.begin(
-        RFID_SCK_PIN,
-        RFID_MISO_PIN,
-        RFID_MOSI_PIN,
-        RFID_SS_PIN
-    );
-
-    rfid.PCD_Init();
-    delay(50);
-
-    byte version =
-        rfid.PCD_ReadRegister(MFRC522::VersionReg);
-
-    Serial.print("RC522 firmware version: 0x");
-    Serial.println(version, HEX);
-
-    if (version == 0x00 || version == 0xFF) {
-        Serial.println(
-            "WARNING: RC522 not detected. Check 3.3V, GND, and SPI wiring."
-        );
-    } else {
-        Serial.println("RC522 initialized successfully.");
-    }
-}
-
-// ============================================================
 // SETUP
 // ============================================================
 
@@ -968,6 +1254,60 @@ void setup() {
         INPUT_PULLUP
     );
 
+    // HC-SR04 pins
+    pinMode(
+        HC_PLASTIC_TRIG_PIN,
+        OUTPUT
+    );
+    digitalWrite(
+        HC_PLASTIC_TRIG_PIN,
+        LOW
+    );
+
+    pinMode(
+        HC_PLASTIC_ECHO_PIN,
+        INPUT
+    );
+
+    pinMode(
+        HC_PAPER_TRIG_PIN,
+        OUTPUT
+    );
+    digitalWrite(
+        HC_PAPER_TRIG_PIN,
+        LOW
+    );
+
+    pinMode(
+        HC_PAPER_ECHO_PIN,
+        INPUT
+    );
+
+    // Servo
+    sorterServo.setPeriodHertz(50);
+    sorterServo.attach(
+        SERVO_PIN,
+        500,
+        2400
+    );
+    moveSorterServo(
+        SERVO_CENTER_ANGLE
+    );
+
+    // RC522 diagnostic initialization.
+    // This preserves the current wiring:
+    // SCK=40, MISO=39, MOSI=38, SS=41, RST=2.
+    SPI.begin(
+        RFID_SCK_PIN,
+        RFID_MISO_PIN,
+        RFID_MOSI_PIN,
+        RFID_SS_PIN
+    );
+
+    rfid.PCD_Init();
+
+    Serial.println("RC522 initialized.");
+
     if (!initializeCamera()) {
         Serial.println(
             "Stopping: camera initialization failed."
@@ -978,8 +1318,6 @@ void setup() {
 #if defined(LED_GPIO_NUM)
     setupLedFlash();
 #endif
-
-    initializeRfid();
 
     connectToWiFi();
 
@@ -999,6 +1337,9 @@ void setup() {
         // Check for a queued Wi-Fi configuration once at boot.
         checkRemoteConfiguration();
         lastConfigCheck = millis();
+
+        // Discover the actual plastic/paper compartment IDs from Laravel.
+        discoverCompartmentIds();
     }
 
     Serial.println();
@@ -1009,6 +1350,10 @@ void setup() {
     Serial.println(
         "Waiting for recyclable..."
     );
+
+    // Take the first fullness reading after boot.
+    lastBinSensorUpload =
+        millis() - BIN_SENSOR_INTERVAL_MS;
 }
 
 // ============================================================
@@ -1017,10 +1362,6 @@ void setup() {
 
 void loop() {
     maintainWiFi();
-
-    // Tap RFID after depositing. The backend identify-card endpoint
-    // claims the current pending recycling session and awards points.
-    handleRfid();
 
     unsigned long nowMs =
         millis();
@@ -1033,6 +1374,20 @@ void loop() {
         lastConfigCheck = nowMs;
         checkRemoteConfiguration();
     }
+
+    if (
+        WiFi.status() == WL_CONNECTED &&
+        nowMs - lastBinSensorUpload >=
+            BIN_SENSOR_INTERVAL_MS &&
+        !classificationInProgress
+    ) {
+        lastBinSensorUpload = nowMs;
+        updateBinSensors();
+    }
+
+    // Diagnostic only. Controller 2 remains the production RFID
+    // controller for student identification and reward claiming.
+    printRFIDDiagnostic();
 
     bool objectDetected =
         digitalRead(IR_SENSOR_PIN) ==

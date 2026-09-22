@@ -23,7 +23,7 @@ class SmartBinCompartment extends Model
     ];
 
     protected $casts = [
-        'current_distance_cm' => 'integer',
+        'current_distance_cm' => 'float',
         'current_fill_percentage' => 'integer',
         'full_threshold_cm' => 'integer',
         'empty_threshold_cm' => 'integer',

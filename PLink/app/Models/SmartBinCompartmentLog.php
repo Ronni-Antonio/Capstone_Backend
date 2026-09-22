@@ -17,7 +17,7 @@ class SmartBinCompartmentLog extends Model
     ];
 
     protected $casts = [
-        'distance_cm' => 'integer',
+        'distance_cm' => 'float',
         'fill_percentage' => 'integer',
     ];
 

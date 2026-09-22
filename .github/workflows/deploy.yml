@@ -163,6 +163,33 @@ jobs:
               # LARAVEL
               # ====================================================
 
+              # ====================================================
+              # PHP EXTENSIONS REQUIRED BY LARAVEL
+              # ====================================================
+
+              echo "Checking/installing required PHP extensions..."
+
+              # PhpSpreadsheet requires the GD extension.
+              PHP_VERSION_SHORT="$(php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')"
+
+              if ! php -m | grep -qi '^gd$'; then
+                echo "GD extension is missing for PHP $PHP_VERSION_SHORT."
+                sudo apt-get update
+                sudo apt-get install -y "php${PHP_VERSION_SHORT}-gd"
+              fi
+
+              php -m | grep -qi '^gd$' || {
+                echo "ERROR: PHP GD extension is still missing after installation."
+                php --ini
+                exit 1
+              }
+
+              echo "PHP GD extension is available."
+
+              # ====================================================
+              # LARAVEL
+              # ====================================================
+
               echo "Installing Laravel dependencies..."
 
               composer install \
