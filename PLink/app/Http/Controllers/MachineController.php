@@ -104,11 +104,17 @@ class MachineController extends Controller
                 ->values();
 
             $compartments = $bin->compartments->map(function ($compartment) {
-                $fill = $this->calculateCompartmentFillPercentage($compartment);
+                $hasReading = $compartment->current_distance_cm !== null && $compartment->last_active_at !== null;
+                $fill = $hasReading ? $this->calculateCompartmentFillPercentage($compartment) : 0;
+                $isStale = $hasReading && $compartment->last_active_at->lt(now()->subSeconds(20));
+                $state = !$hasReading || $isStale
+                    ? 'offline'
+                    : $this->fillState($fill);
 
                 return array_merge($compartment->toArray(), [
                     'current_fill_percentage' => (int) round($fill),
-                    'fill_state' => $this->fillState($fill),
+                    'fill_state' => $state,
+                    'sensor_online' => $hasReading && !$isStale,
                 ]);
             })->values();
 
@@ -140,10 +146,10 @@ class MachineController extends Controller
             'name' => 'required|string|max:255',
             'location' => 'required|string|max:255',
             'status' => 'nullable|in:online,offline,maintenance,full',
-            'current_distance_cm' => 'nullable|integer|min:0',
-            'current_fill_percentage' => 'nullable|integer|min:0|max:100',
-            'full_threshold_cm' => 'nullable|integer|min:0',
-            'empty_threshold_cm' => 'nullable|integer|min:1',
+            'current_distance_cm' => 'nullable|numeric|min:0|max:1000',
+            'current_fill_percentage' => 'nullable|numeric|min:0|max:100',
+            'full_threshold_cm' => 'nullable|numeric|min:0|max:1000',
+            'empty_threshold_cm' => 'nullable|numeric|min:1|max:1000',
             'last_maintenance_at' => 'nullable|date',
             'last_active_at' => 'nullable|date',
         ]);
@@ -229,14 +235,14 @@ class MachineController extends Controller
             ->firstOrFail();
 
         $validated = $request->validate([
-            'distance_cm' => 'required|integer|min:0|max:1000',
-            'full_threshold_cm' => 'sometimes|integer|min:0|max:1000',
-            'empty_threshold_cm' => 'sometimes|integer|min:1|max:1000',
+            'distance_cm' => 'required|numeric|min:0|max:1000',
+            'full_threshold_cm' => 'sometimes|numeric|min:0|max:1000',
+            'empty_threshold_cm' => 'sometimes|numeric|min:1|max:1000',
         ]);
 
         $oldFill = $this->calculateCompartmentFillPercentage($target);
-        $full = $validated['full_threshold_cm'] ?? $target->full_threshold_cm;
-        $empty = $validated['empty_threshold_cm'] ?? $target->empty_threshold_cm;
+        $full = (float) ($validated['full_threshold_cm'] ?? $target->full_threshold_cm);
+        $empty = (float) ($validated['empty_threshold_cm'] ?? $target->empty_threshold_cm);
 
         if ($empty <= $full) {
             return response()->json([
@@ -253,7 +259,7 @@ class MachineController extends Controller
         $compartmentStatus = $fill >= 100 ? 'full' : 'online';
 
         $target->update([
-            'current_distance_cm' => $validated['distance_cm'],
+            'current_distance_cm' => round((float) $validated['distance_cm'], 2),
             'current_fill_percentage' => (int) round($fill),
             'full_threshold_cm' => $full,
             'empty_threshold_cm' => $empty,
@@ -263,7 +269,7 @@ class MachineController extends Controller
 
         SmartBinCompartmentLog::create([
             'compartment_id' => $target->compartment_id,
-            'distance_cm' => $validated['distance_cm'],
+            'distance_cm' => round((float) $validated['distance_cm'], 2),
             'fill_percentage' => (int) round($fill),
             'status' => $this->fillState($fill),
         ]);

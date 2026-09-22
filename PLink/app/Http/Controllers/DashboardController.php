@@ -266,6 +266,22 @@ class DashboardController extends Controller
                 ])
                 ->first();
 
+            if ($smartBin) {
+                $smartBin->setRelation('compartments', $smartBin->compartments->map(function ($compartment) {
+                    $hasReading = $compartment->current_distance_cm !== null && $compartment->last_active_at !== null;
+                    $isStale = $hasReading && $compartment->last_active_at->lt(now()->subSeconds(20));
+                    $fill = (int) round(max(0, min(100, (float) ($compartment->current_fill_percentage ?? 0))));
+
+                    $compartment->setAttribute('current_fill_percentage', $fill);
+                    $compartment->setAttribute('fill_state', !$hasReading || $isStale
+                        ? 'offline'
+                        : ($fill >= 100 ? 'full' : ($fill >= 80 ? 'almost_full' : 'normal')));
+                    $compartment->setAttribute('sensor_online', $hasReading && !$isStale);
+
+                    return $compartment;
+                })->values());
+            }
+
             return [
                 'summary' => [
                     'total_students' => (int) $totalStudents,

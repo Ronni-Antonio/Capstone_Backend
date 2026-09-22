@@ -32,20 +32,15 @@ static const char* CLASSIFICATION_URL =
 // ============================================================
 
 static const char* FALLBACK_SSID =
-    "olliebear";
+    "Roni :3";
 
 static const char* FALLBACK_PASSWORD =
-    "xmlxsldtd";
-
-// Bump this number any time you change FALLBACK_SSID or
-// FALLBACK_PASSWORD. On boot, if the stored version is different,
-// the fallback credentials are written to NVS exactly once.
-// This replaces the old RESET_WIFI_CREDENTIALS reboot-loop flag.
-const int CREDENTIALS_VERSION = 1;
+    "p00pyp4nt5";
 
 // ============================================================
 // CONTROLLER 1 HARDWARE
 // ============================================================
+
 
 #define IR_SENSOR_PIN 42
 #define IR_DETECTED_STATE LOW
@@ -74,9 +69,9 @@ int plasticCompartmentId = -1;
 int paperCompartmentId = -1;
 
 // Servo positions. Adjust these mechanically after testing.
-const int SERVO_CENTER_ANGLE  = 90;
+const int SERVO_CENTER_ANGLE = 90;
 const int SERVO_PLASTIC_ANGLE = 35;   // LEFT
-const int SERVO_PAPER_ANGLE   = 145;  // RIGHT
+const int SERVO_PAPER_ANGLE = 145;    // RIGHT
 
 const unsigned long SERVO_HOLD_MS = 900;
 
@@ -125,24 +120,42 @@ void startCameraServer();
 void setupLedFlash();
 
 // Hardware helpers
-float readUltrasonicDistanceCM(int trigPin, int echoPin);
-float readStableDistanceCM(int trigPin, int echoPin);
-void  updateBinSensors();
-bool  discoverCompartmentIds();
-bool  uploadCompartmentDistance(int compartmentId,
-                                const char* materialName,
-                                float distanceCm);
-void  routeClassifiedItem(const String& compartment);
-void  moveSorterServo(int angle);
-void  printRFIDDiagnostic();
+float readUltrasonicDistanceCM(
+    int trigPin,
+    int echoPin
+);
+
+float readStableDistanceCM(
+    int trigPin,
+    int echoPin
+);
+
+void updateBinSensors();
+bool discoverCompartmentIds();
+bool uploadCompartmentDistance(
+    const char* compartmentCode,
+    float distanceCm
+);
+
+void routeClassifiedItem(
+    const String& compartment
+);
+
+void moveSorterServo(
+    int angle
+);
+
+void printRFIDDiagnostic();
 
 // ============================================================
 // HTTPS HELPER
 // ============================================================
 
-bool beginSecureRequest(WiFiClientSecure& client,
-                        HTTPClient& http,
-                        const String& url) {
+bool beginSecureRequest(
+    WiFiClientSecure& client,
+    HTTPClient& http,
+    const String& url
+) {
     // Development/capstone testing:
     // encrypted HTTPS is used, but the server certificate is not pinned.
     // For the final hardened build, replace setInsecure() with the
@@ -163,157 +176,71 @@ bool isHttpSuccess(int code) {
 // WI-FI / NVS
 // ============================================================
 
-String loadStoredString(const char* key, const char* fallback) {
-    if (!preferences.begin("plink-wifi", true)) {
-        Serial.println("NVS open (read) failed; using fallback.");
-        return String(fallback);
-    }
+String loadStoredString(
+    const char* key,
+    const char* fallback
+) {
+    preferences.begin("plink-wifi", true);
     String value = preferences.getString(key, fallback);
     preferences.end();
     return value;
 }
 
-void saveWiFiCredentials(const String& ssid, const String& password) {
-    if (!preferences.begin("plink-wifi", false)) {
-        Serial.println("NVS open (write) failed; credentials NOT saved.");
-        return;
-    }
+void saveWiFiCredentials(
+    const String& ssid,
+    const String& password
+) {
+    preferences.begin("plink-wifi", false);
     preferences.putString("ssid", ssid);
     preferences.putString("password", password);
     preferences.end();
 }
 
-// Wipes stored credentials and writes the fallback values.
-// Does NOT reboot. Caller decides what to do next.
-void resetWiFiCredentialsToFallback() {
-    Serial.println();
-    Serial.println("======================================");
-    Serial.println("RESETTING STORED WI-FI CREDENTIALS");
-    Serial.println("======================================");
-
-    if (!preferences.begin("plink-wifi", false)) {
-        Serial.println("NVS open failed; cannot reset credentials.");
-        return;
-    }
-
-    preferences.remove("ssid");
-    preferences.remove("password");
-
-    preferences.putString("ssid", FALLBACK_SSID);
-    preferences.putString("password", FALLBACK_PASSWORD);
-    preferences.putInt("cred_ver", CREDENTIALS_VERSION);
-
-    preferences.end();
-
-    Serial.print("SSID: ");
-    Serial.println(FALLBACK_SSID);
-    Serial.print("Password length: ");
-    Serial.println(strlen(FALLBACK_PASSWORD));
-}
-
-// One-time migration: if the stored credential version differs from
-// CREDENTIALS_VERSION, copy the current fallback SSID/password into
-// NVS and record the new version. Never reboots.
-void migrateWiFiCredentialsIfNeeded() {
-    if (!preferences.begin("plink-wifi", false)) {
-        Serial.println("NVS open failed during credential migration.");
-        return;
-    }
-
-    int storedVersion = preferences.getInt("cred_ver", 0);
-
-    if (storedVersion != CREDENTIALS_VERSION) {
-        Serial.printf(
-            "Migrating Wi-Fi credentials from version %d to %d\n",
-            storedVersion,
-            CREDENTIALS_VERSION
-        );
-
-        preferences.putString("ssid", FALLBACK_SSID);
-        preferences.putString("password", FALLBACK_PASSWORD);
-        preferences.putInt("cred_ver", CREDENTIALS_VERSION);
-    }
-
-    preferences.end();
-}
-
 void connectToWiFi() {
-    // Reload credentials AFTER any migration has been done in setup().
-    String ssid     = loadStoredString("ssid", FALLBACK_SSID);
-    String password = loadStoredString("password", FALLBACK_PASSWORD);
+    String ssid =
+        loadStoredString("ssid", FALLBACK_SSID);
 
-    Serial.println();
-    Serial.println("========== WIFI DEBUG ==========");
-    Serial.print("SSID being used: ");
-    Serial.println(ssid);
-    Serial.print("Password length: ");
-    Serial.println(password.length());
+    String password =
+        loadStoredString("password", FALLBACK_PASSWORD);
 
-    // Clean radio state before beginning.
-    WiFi.persistent(false);       // don't let the driver fight our NVS
-    WiFi.mode(WIFI_OFF);
-    delay(200);
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);
-    WiFi.disconnect(true, true);  // disconnect + erase driver-stored AP
-    delay(200);
 
-    Serial.print("WiFi mode after setup: ");
-    Serial.println(WiFi.getMode());
+    WiFi.begin(
+        ssid.c_str(),
+        password.c_str()
+    );
 
-    Serial.println("Starting Wi-Fi connection...");
-    WiFi.begin(ssid.c_str(), password.c_str());
+    Serial.print("Connecting to Wi-Fi");
 
     unsigned long started = millis();
-    while (WiFi.status() != WL_CONNECTED &&
-           millis() - started < 30000) {
+
+    while (
+        WiFi.status() != WL_CONNECTED &&
+        millis() - started < 30000
+    ) {
         delay(500);
         Serial.print(".");
-        Serial.print(" Status: ");
-        Serial.println(WiFi.status());
     }
+
     Serial.println();
 
-    Serial.print("Final Wi-Fi status: ");
-    Serial.println(WiFi.status());
-
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.println();
-        Serial.println("SUCCESS: Wi-Fi Connected!");
-        Serial.println("--------------------------------");
-        Serial.print("SSID: ");
-        Serial.println(WiFi.SSID());
-        Serial.print("IP Address: ");
-        Serial.println(WiFi.localIP());
-        Serial.print("Gateway: ");
-        Serial.println(WiFi.gatewayIP());
-        Serial.print("RSSI: ");
-        Serial.print(WiFi.RSSI());
-        Serial.println(" dBm");
-        Serial.print("MAC Address: ");
-        Serial.println(WiFi.macAddress());
-        Serial.println("--------------------------------");
-    } else {
-        Serial.println();
-        Serial.println("ERROR: Wi-Fi Connection Failed!");
-        Serial.print("Status Code: ");
-        Serial.println(WiFi.status());
-        Serial.println("--------------------------------");
-        Serial.println("Possible causes:");
-        Serial.println("- Incorrect SSID");
-        Serial.println("- Incorrect password");
-        Serial.println("- Hotspot is using 5 GHz (ESP32 is 2.4 GHz only)");
-        Serial.println("- Weak signal");
-        Serial.println("- Hotspot device limit");
-        Serial.println("- Router authentication issue");
-        Serial.println("- SSID contains trailing whitespace in NVS");
-        Serial.println("--------------------------------");
-
-        // Leave the radio idle so the next retry starts clean.
-        WiFi.disconnect(true, true);
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("Wi-Fi connection timed out.");
+        return;
     }
 
-    Serial.println("================================");
+    Serial.println("Wi-Fi connected.");
+
+    Serial.print("SSID: ");
+    Serial.println(WiFi.SSID());
+
+    Serial.print("ESP32 IP: ");
+    Serial.println(WiFi.localIP());
+
+    Serial.print("RSSI: ");
+    Serial.print(WiFi.RSSI());
+    Serial.println(" dBm");
 }
 
 void maintainWiFi() {
@@ -326,21 +253,12 @@ void maintainWiFi() {
     if (millis() - lastReconnectAttempt < 10000) {
         return;
     }
+
     lastReconnectAttempt = millis();
 
     Serial.println("Wi-Fi disconnected. Reconnecting...");
-
-    // Do NOT wipe credentials here — just re-init the radio.
-    WiFi.disconnect(true, true);
-    delay(200);
-    WiFi.mode(WIFI_STA);
-    WiFi.setSleep(false);
-
-    String ssid     = loadStoredString("ssid", FALLBACK_SSID);
-    String password = loadStoredString("password", FALLBACK_PASSWORD);
-
-    WiFi.begin(ssid.c_str(), password.c_str());
-    // No blocking wait: the main loop keeps running.
+    WiFi.disconnect();
+    connectToWiFi();
 }
 
 // ============================================================
@@ -365,9 +283,20 @@ void acknowledgeConfiguration(int version) {
         return;
     }
 
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("Accept", "application/json");
-    http.addHeader("X-Device-Key", DEVICE_KEY);
+    http.addHeader(
+        "Content-Type",
+        "application/json"
+    );
+
+    http.addHeader(
+        "Accept",
+        "application/json"
+    );
+
+    http.addHeader(
+        "X-Device-Key",
+        DEVICE_KEY
+    );
 
     JsonDocument doc;
     doc["config_version"] = version;
@@ -377,7 +306,10 @@ void acknowledgeConfiguration(int version) {
 
     int code = http.POST(body);
 
-    Serial.printf("Wi-Fi config ACK: HTTP %d\n", code);
+    Serial.printf(
+        "Wi-Fi config ACK: HTTP %d\n",
+        code
+    );
 
     if (!isHttpSuccess(code)) {
         Serial.println(http.getString());
@@ -400,17 +332,30 @@ void checkRemoteConfiguration() {
         CONTROLLER_CODE;
 
     if (!beginSecureRequest(client, http, url)) {
-        Serial.println("Failed to initialize remote-config request.");
+        Serial.println(
+            "Failed to initialize remote-config request."
+        );
         return;
     }
 
-    http.addHeader("Accept", "application/json");
-    http.addHeader("X-Device-Key", DEVICE_KEY);
+    http.addHeader(
+        "Accept",
+        "application/json"
+    );
+
+    http.addHeader(
+        "X-Device-Key",
+        DEVICE_KEY
+    );
 
     int code = http.GET();
 
     if (!isHttpSuccess(code)) {
-        Serial.printf("Remote config HTTP %d\n", code);
+        Serial.printf(
+            "Remote config HTTP %d\n",
+            code
+        );
+
         Serial.println(http.getString());
         http.end();
         return;
@@ -421,38 +366,67 @@ void checkRemoteConfiguration() {
 
     JsonDocument doc;
 
-    DeserializationError jsonError = deserializeJson(doc, response);
+    DeserializationError jsonError =
+        deserializeJson(doc, response);
 
     if (jsonError) {
-        Serial.print("Remote config JSON error: ");
-        Serial.println(jsonError.c_str());
+        Serial.print(
+            "Remote config JSON error: "
+        );
+        Serial.println(
+            jsonError.c_str()
+        );
         return;
     }
 
-    int configVersion   = doc["config_version"]  | 0;
-    int appliedVersion  = doc["applied_version"] | 0;
-    bool restartRequired = doc["restart_required"] | false;
+    int configVersion =
+        doc["config_version"] | 0;
 
-    if (!restartRequired || configVersion <= appliedVersion) {
+    int appliedVersion =
+        doc["applied_version"] | 0;
+
+    bool restartRequired =
+        doc["restart_required"] | false;
+
+    if (
+        !restartRequired ||
+        configVersion <= appliedVersion
+    ) {
         return;
     }
 
-    String newSSID     = doc["wifi_ssid"].as<String>();
-    String newPassword = doc["wifi_password"].as<String>();
+    String newSSID =
+        doc["wifi_ssid"].as<String>();
+
+    String newPassword =
+        doc["wifi_password"].as<String>();
 
     if (newSSID.length() == 0) {
-        Serial.println("Remote Wi-Fi config had an empty SSID.");
+        Serial.println(
+            "Remote Wi-Fi config had an empty SSID."
+        );
         return;
     }
 
-    Serial.println("New Wi-Fi configuration received.");
+    Serial.println(
+        "New Wi-Fi configuration received."
+    );
 
     // Acknowledge while the OLD Wi-Fi connection still works.
     // The credentials are stored before the restart.
-    saveWiFiCredentials(newSSID, newPassword);
-    acknowledgeConfiguration(configVersion);
+    saveWiFiCredentials(
+        newSSID,
+        newPassword
+    );
 
-    Serial.println("Restarting to apply new Wi-Fi...");
+    acknowledgeConfiguration(
+        configVersion
+    );
+
+    Serial.println(
+        "Restarting to apply new Wi-Fi..."
+    );
+
     delay(1000);
     ESP.restart();
 }
@@ -461,74 +435,119 @@ void checkRemoteConfiguration() {
 // CLASSIFICATION RESULT
 // ============================================================
 
-void handleClassificationResponse(const String& responseBody) {
+void handleClassificationResponse(
+    const String& responseBody
+) {
     JsonDocument doc;
 
-    DeserializationError error = deserializeJson(doc, responseBody);
+    DeserializationError error =
+        deserializeJson(
+            doc,
+            responseBody
+        );
 
     if (error) {
-        Serial.print("Classification JSON error: ");
-        Serial.println(error.c_str());
+        Serial.print(
+            "Classification JSON error: "
+        );
+
+        Serial.println(
+            error.c_str()
+        );
+
         return;
     }
 
-    bool success = doc["success"] | false;
+    bool success =
+        doc["success"] | false;
 
     if (!success) {
-        Serial.println("Laravel reported classification failure.");
+        Serial.println(
+            "Laravel reported classification failure."
+        );
+
         return;
     }
 
     String rawLabel =
-        doc["classification"]["label"] | "";
+        doc["classification"]["label"] |
+        "";
 
     String mappedType =
-        doc["classification"]["mapped_type_name"] | "";
+        doc["classification"]["mapped_type_name"] |
+        "";
 
     float confidence =
-        doc["classification"]["confidence"] | 0.0f;
+        doc["classification"]["confidence"] |
+        0.0f;
 
     int itemPoints =
-        doc["classification"]["points"] | 0;
+        doc["classification"]["points"] |
+        0;
 
     bool accepted =
-        doc["classification"]["accepted"] | false;
+        doc["classification"]["accepted"] |
+        false;
 
     String compartment =
-        doc["classification"]["compartment"] | "reject";
+        doc["classification"]["compartment"] |
+        "reject";
 
     int sessionItems =
-        doc["session"]["items"] | 0;
+        doc["session"]["items"] |
+        0;
 
     int sessionPoints =
-        doc["session"]["pending_points"] | 0;
+        doc["session"]["pending_points"] |
+        0;
 
-    lastClassification = mappedType.length() ? mappedType : rawLabel;
-    lastCompartment    = compartment;
-    pendingSessionItems  = sessionItems;
+    lastClassification = mappedType.length()
+        ? mappedType
+        : rawLabel;
+
+    lastCompartment = compartment;
+    pendingSessionItems = sessionItems;
     pendingSessionPoints = sessionPoints;
 
     Serial.println();
-    Serial.println("========== CLASSIFICATION ==========");
+    Serial.println(
+        "========== CLASSIFICATION =========="
+    );
+
     Serial.print("CNN label: ");
     Serial.println(rawLabel);
+
     Serial.print("Mapped material: ");
     Serial.println(mappedType);
+
     Serial.print("Confidence: ");
     Serial.print(confidence * 100.0f, 2);
     Serial.println("%");
+
     Serial.print("Accepted: ");
-    Serial.println(accepted ? "YES" : "NO");
+    Serial.println(
+        accepted ? "YES" : "NO"
+    );
+
     Serial.print("Item points: ");
     Serial.println(itemPoints);
+
     Serial.print("Route: ");
     Serial.println(compartment);
+
     Serial.print("Session items: ");
     Serial.println(sessionItems);
+
     Serial.print("Pending points: ");
     Serial.println(sessionPoints);
-    Serial.println("Tap RFID on Controller 2 when finished.");
-    Serial.println("====================================");
+
+    Serial.println(
+        "Tap RFID on Controller 2 when finished."
+    );
+
+    Serial.println(
+        "===================================="
+    );
 
     // Physical segregation is controlled from the Laravel mapping.
     // The CNN only classifies; Laravel decides the mapped compartment.
@@ -541,7 +560,9 @@ void handleClassificationResponse(const String& responseBody) {
 
 void moveSorterServo(int angle) {
     angle = constrain(angle, 0, 180);
+
     sorterServo.write(angle);
+
     Serial.print("Servo angle: ");
     Serial.println(angle);
 }
@@ -549,8 +570,10 @@ void moveSorterServo(int angle) {
 void routeClassifiedItem(const String& compartment) {
     if (compartment == "plastic") {
         Serial.println("Routing item: PLASTIC -> LEFT");
+
         moveSorterServo(SERVO_PLASTIC_ANGLE);
         delay(SERVO_HOLD_MS);
+
         moveSorterServo(SERVO_CENTER_ANGLE);
         Serial.println("Sorter returned to CENTER.");
         return;
@@ -558,14 +581,19 @@ void routeClassifiedItem(const String& compartment) {
 
     if (compartment == "paper") {
         Serial.println("Routing item: WHITE PAPER -> RIGHT");
+
         moveSorterServo(SERVO_PAPER_ANGLE);
         delay(SERVO_HOLD_MS);
+
         moveSorterServo(SERVO_CENTER_ANGLE);
         Serial.println("Sorter returned to CENTER.");
         return;
     }
 
-    Serial.println("Routing item: REJECT / UNKNOWN -> CENTER");
+    Serial.println(
+        "Routing item: REJECT / UNKNOWN -> CENTER"
+    );
+
     moveSorterServo(SERVO_CENTER_ANGLE);
 }
 
@@ -573,7 +601,10 @@ void routeClassifiedItem(const String& compartment) {
 // HC-SR04 DISTANCE
 // ============================================================
 
-float readUltrasonicDistanceCM(int trigPin, int echoPin) {
+float readUltrasonicDistanceCM(
+    int trigPin,
+    int echoPin
+) {
     digitalWrite(trigPin, LOW);
     delayMicroseconds(3);
 
@@ -582,27 +613,42 @@ float readUltrasonicDistanceCM(int trigPin, int echoPin) {
     digitalWrite(trigPin, LOW);
 
     unsigned long duration =
-        pulseIn(echoPin, HIGH, ULTRASONIC_TIMEOUT_US);
+        pulseIn(
+            echoPin,
+            HIGH,
+            ULTRASONIC_TIMEOUT_US
+        );
 
     if (duration == 0) {
         return -1.0f;
     }
 
-    float distanceCm = (duration * 0.0343f) / 2.0f;
+    float distanceCm =
+        (duration * 0.0343f) / 2.0f;
 
-    if (distanceCm <= 0.0f || distanceCm > MAX_VALID_DISTANCE_CM) {
+    if (
+        distanceCm <= 0.0f ||
+        distanceCm > MAX_VALID_DISTANCE_CM
+    ) {
         return -1.0f;
     }
 
     return distanceCm;
 }
 
-float readStableDistanceCM(int trigPin, int echoPin) {
+float readStableDistanceCM(
+    int trigPin,
+    int echoPin
+) {
     float total = 0.0f;
     int validSamples = 0;
 
     for (int i = 0; i < DISTANCE_SAMPLES; i++) {
-        float distance = readUltrasonicDistanceCM(trigPin, echoPin);
+        float distance =
+            readUltrasonicDistanceCM(
+                trigPin,
+                echoPin
+            );
 
         if (distance > 0.0f) {
             total += distance;
@@ -638,17 +684,29 @@ bool discoverCompartmentIds() {
         String(SMART_BIN_ID);
 
     if (!beginSecureRequest(client, http, url)) {
-        Serial.println("Could not initialize smart-bin discovery request.");
+        Serial.println(
+            "Could not initialize smart-bin discovery request."
+        );
         return false;
     }
 
-    http.addHeader("Accept", "application/json");
-    http.addHeader("X-Device-Key", DEVICE_KEY);
+    http.addHeader(
+        "Accept",
+        "application/json"
+    );
+
+    http.addHeader(
+        "X-Device-Key",
+        DEVICE_KEY
+    );
 
     int responseCode = http.GET();
 
     if (!isHttpSuccess(responseCode)) {
-        Serial.printf("Smart-bin discovery HTTP %d\n", responseCode);
+        Serial.printf(
+            "Smart-bin discovery HTTP %d\n",
+            responseCode
+        );
         Serial.println(http.getString());
         http.end();
         return false;
@@ -659,22 +717,31 @@ bool discoverCompartmentIds() {
 
     JsonDocument doc;
 
-    DeserializationError error = deserializeJson(doc, responseBody);
+    DeserializationError error =
+        deserializeJson(doc, responseBody);
 
     if (error) {
-        Serial.print("Smart-bin discovery JSON error: ");
+        Serial.print(
+            "Smart-bin discovery JSON error: "
+        );
         Serial.println(error.c_str());
         return false;
     }
 
     plasticCompartmentId = -1;
-    paperCompartmentId   = -1;
+    paperCompartmentId = -1;
 
-    JsonArray compartments = doc["compartments"].as<JsonArray>();
+    JsonArray compartments =
+        doc["compartments"].as<JsonArray>();
 
     for (JsonObject compartment : compartments) {
-        int id = compartment["compartment_id"] | -1;
-        String material = compartment["material_category"] | "";
+        int id =
+            compartment["compartment_id"] | -1;
+
+        String material =
+            compartment["material_category"] |
+            "";
+
         material.toLowerCase();
 
         if (material == "plastic") {
@@ -686,21 +753,28 @@ bool discoverCompartmentIds() {
 
     Serial.print("Plastic compartment ID: ");
     Serial.println(plasticCompartmentId);
+
     Serial.print("Paper compartment ID: ");
     Serial.println(paperCompartmentId);
 
-    return plasticCompartmentId > 0 && paperCompartmentId > 0;
+    return
+        plasticCompartmentId > 0 &&
+        paperCompartmentId > 0;
 }
 
 // ============================================================
 // BIN SENSOR API
 // ============================================================
 
-bool uploadCompartmentDistance(int compartmentId,
-                               const char* materialName,
-                               float distanceCm) {
+bool uploadCompartmentDistance(
+    int compartmentId,
+    const char* materialName,
+    float distanceCm
+) {
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("Cannot upload bin distance: Wi-Fi disconnected.");
+        Serial.println(
+            "Cannot upload bin distance: Wi-Fi disconnected."
+        );
         return false;
     }
 
@@ -716,23 +790,45 @@ bool uploadCompartmentDistance(int compartmentId,
         "/sensor";
 
     if (!beginSecureRequest(client, http, url)) {
-        Serial.println("Could not initialize bin sensor HTTPS request.");
+        Serial.println(
+            "Could not initialize bin sensor HTTPS request."
+        );
         return false;
     }
 
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("Accept", "application/json");
-    http.addHeader("X-Device-Key", DEVICE_KEY);
-    http.addHeader("X-Controller-Code", CONTROLLER_CODE);
+    http.addHeader(
+        "Content-Type",
+        "application/json"
+    );
+
+    http.addHeader(
+        "Accept",
+        "application/json"
+    );
+
+    http.addHeader(
+        "X-Device-Key",
+        DEVICE_KEY
+    );
+
+    http.addHeader(
+        "X-Controller-Code",
+        CONTROLLER_CODE
+    );
 
     JsonDocument requestDoc;
+
     requestDoc["distance_cm"] = distanceCm;
 
     String requestBody;
     serializeJson(requestDoc, requestBody);
 
-    int responseCode = http.PATCH(requestBody);
-    String responseBody = http.getString();
+    int responseCode =
+        http.PATCH(requestBody);
+
+    String responseBody =
+        http.getString();
+
     http.end();
 
     Serial.printf(
@@ -751,8 +847,12 @@ bool uploadCompartmentDistance(int compartmentId,
     // Print the backend-calculated fullness when available.
     JsonDocument responseDoc;
 
-    if (deserializeJson(responseDoc, responseBody) ==
-        DeserializationError::Ok) {
+    if (
+        deserializeJson(
+            responseDoc,
+            responseBody
+        ) == DeserializationError::Ok
+    ) {
         float fill =
             responseDoc["data"]["current_fill_percentage"] |
             responseDoc["current_fill_percentage"] |
@@ -783,7 +883,10 @@ void updateBinSensors() {
         return;
     }
 
-    if (plasticCompartmentId <= 0 || paperCompartmentId <= 0) {
+    if (
+        plasticCompartmentId <= 0 ||
+        paperCompartmentId <= 0
+    ) {
         if (!discoverCompartmentIds()) {
             Serial.println(
                 "Cannot upload fullness: compartment IDs were not discovered."
@@ -798,7 +901,10 @@ void updateBinSensors() {
     // Read PLASTIC first, then PAPER. The sensors are not triggered
     // simultaneously, which reduces ultrasonic cross-talk.
     float plasticDistance =
-        readStableDistanceCM(HC_PLASTIC_TRIG_PIN, HC_PLASTIC_ECHO_PIN);
+        readStableDistanceCM(
+            HC_PLASTIC_TRIG_PIN,
+            HC_PLASTIC_ECHO_PIN
+        );
 
     Serial.print("Plastic distance: ");
 
@@ -819,7 +925,10 @@ void updateBinSensors() {
     delay(100);
 
     float paperDistance =
-        readStableDistanceCM(HC_PAPER_TRIG_PIN, HC_PAPER_ECHO_PIN);
+        readStableDistanceCM(
+            HC_PAPER_TRIG_PIN,
+            HC_PAPER_ECHO_PIN
+        );
 
     Serial.print("Paper distance: ");
 
@@ -861,7 +970,11 @@ void printRFIDDiagnostic() {
         if (rfid.uid.uidByte[i] < 0x10) {
             Serial.print("0");
         }
-        Serial.print(rfid.uid.uidByte[i], HEX);
+
+        Serial.print(
+            rfid.uid.uidByte[i],
+            HEX
+        );
 
         if (i + 1 < rfid.uid.size) {
             Serial.print(":");
@@ -884,7 +997,9 @@ bool captureAndSendImage() {
     }
 
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("Cannot classify: Wi-Fi disconnected.");
+        Serial.println(
+            "Cannot classify: Wi-Fi disconnected."
+        );
         return false;
     }
 
@@ -892,54 +1007,116 @@ bool captureAndSendImage() {
 
     Serial.println("Capturing image...");
 
-    camera_fb_t* frameBuffer = esp_camera_fb_get();
+    camera_fb_t* frameBuffer =
+        esp_camera_fb_get();
 
     if (!frameBuffer) {
-        Serial.println("Camera capture failed.");
+        Serial.println(
+            "Camera capture failed."
+        );
+
         classificationInProgress = false;
         return false;
     }
 
-    Serial.printf("JPEG captured: %u bytes\n", frameBuffer->len);
+    Serial.printf(
+        "JPEG captured: %u bytes\n",
+        frameBuffer->len
+    );
 
     WiFiClientSecure client;
     HTTPClient http;
 
-    if (!beginSecureRequest(client, http, CLASSIFICATION_URL)) {
-        Serial.println("Could not initialize HTTPS request.");
-        esp_camera_fb_return(frameBuffer);
+    if (
+        !beginSecureRequest(
+            client,
+            http,
+            CLASSIFICATION_URL
+        )
+    ) {
+        Serial.println(
+            "Could not initialize HTTPS request."
+        );
+
+        esp_camera_fb_return(
+            frameBuffer
+        );
+
         classificationInProgress = false;
         return false;
     }
 
-    http.addHeader("Content-Type", "image/jpeg");
-    http.addHeader("Accept", "application/json");
-    http.addHeader("X-Device-Key", DEVICE_KEY);
-    http.addHeader("X-Controller-Code", CONTROLLER_CODE);
+    http.addHeader(
+        "Content-Type",
+        "image/jpeg"
+    );
+
+    http.addHeader(
+        "Accept",
+        "application/json"
+    );
+
+    http.addHeader(
+        "X-Device-Key",
+        DEVICE_KEY
+    );
+
+    http.addHeader(
+        "X-Controller-Code",
+        CONTROLLER_CODE
+    );
 
     int responseCode =
-        http.POST(frameBuffer->buf, frameBuffer->len);
+        http.POST(
+            frameBuffer->buf,
+            frameBuffer->len
+        );
 
     // Buffer is no longer needed after POST returns.
-    esp_camera_fb_return(frameBuffer);
+    esp_camera_fb_return(
+        frameBuffer
+    );
 
     bool requestSuccessful = false;
 
     if (responseCode > 0) {
-        String responseBody = http.getString();
+        String responseBody =
+            http.getString();
 
-        Serial.printf("Classification HTTP %d\n", responseCode);
+        Serial.printf(
+            "Classification HTTP %d\n",
+            responseCode
+        );
 
-        if (isHttpSuccess(responseCode)) {
-            handleClassificationResponse(responseBody);
+        if (
+            isHttpSuccess(
+                responseCode
+            )
+        ) {
+            handleClassificationResponse(
+                responseBody
+            );
+
             requestSuccessful = true;
         } else {
-            Serial.println("Laravel error:");
-            Serial.println(responseBody);
+            Serial.println(
+                "Laravel error:"
+            );
+
+            Serial.println(
+                responseBody
+            );
         }
     } else {
-        Serial.print("HTTPS transport error: ");
-        Serial.println(http.errorToString(responseCode));
+        Serial.print(
+            "HTTPS transport error: "
+        );
+
+        Serial.println(
+            http.errorToString(
+                responseCode
+            )
+        );
     }
 
     http.end();
@@ -957,7 +1134,7 @@ bool initializeCamera() {
     camera_config_t config = {};
 
     config.ledc_channel = LEDC_CHANNEL_0;
-    config.ledc_timer   = LEDC_TIMER_0;
+    config.ledc_timer = LEDC_TIMER_0;
 
     config.pin_d0 = Y2_GPIO_NUM;
     config.pin_d1 = Y3_GPIO_NUM;
@@ -968,42 +1145,44 @@ bool initializeCamera() {
     config.pin_d6 = Y8_GPIO_NUM;
     config.pin_d7 = Y9_GPIO_NUM;
 
-    config.pin_xclk  = XCLK_GPIO_NUM;
-    config.pin_pclk  = PCLK_GPIO_NUM;
+    config.pin_xclk = XCLK_GPIO_NUM;
+    config.pin_pclk = PCLK_GPIO_NUM;
     config.pin_vsync = VSYNC_GPIO_NUM;
-    config.pin_href  = HREF_GPIO_NUM;
+    config.pin_href = HREF_GPIO_NUM;
 
     config.pin_sccb_sda = SIOD_GPIO_NUM;
     config.pin_sccb_scl = SIOC_GPIO_NUM;
 
-    config.pin_pwdn  = PWDN_GPIO_NUM;
+    config.pin_pwdn = PWDN_GPIO_NUM;
     config.pin_reset = RESET_GPIO_NUM;
 
     config.xclk_freq_hz = 20000000;
     config.pixel_format = PIXFORMAT_JPEG;
 
-    config.grab_mode   = CAMERA_GRAB_WHEN_EMPTY;
+    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
     config.fb_location = CAMERA_FB_IN_PSRAM;
 
-    config.frame_size   = FRAMESIZE_QVGA;
+    config.frame_size = FRAMESIZE_QVGA;
     config.jpeg_quality = 12;
-    config.fb_count     = 1;
+    config.fb_count = 1;
 
     if (psramFound()) {
         Serial.println("PSRAM found.");
 
-        config.frame_size   = FRAMESIZE_VGA;
+        config.frame_size = FRAMESIZE_VGA;
         config.jpeg_quality = 12;
-        config.fb_count     = 2;
-        config.grab_mode    = CAMERA_GRAB_LATEST;
-        config.fb_location  = CAMERA_FB_IN_PSRAM;
+        config.fb_count = 2;
+        config.grab_mode = CAMERA_GRAB_LATEST;
+        config.fb_location = CAMERA_FB_IN_PSRAM;
     } else {
-        Serial.println("PSRAM not found. Using DRAM.");
+        Serial.println(
+            "PSRAM not found. Using DRAM."
+        );
 
-        config.frame_size   = FRAMESIZE_QVGA;
+        config.frame_size = FRAMESIZE_QVGA;
         config.jpeg_quality = 15;
-        config.fb_count     = 1;
-        config.fb_location  = CAMERA_FB_IN_DRAM;
+        config.fb_count = 1;
+        config.fb_location = CAMERA_FB_IN_DRAM;
     }
 
 #if defined(CAMERA_MODEL_ESP_EYE)
@@ -1011,7 +1190,8 @@ bool initializeCamera() {
     pinMode(14, INPUT_PULLUP);
 #endif
 
-    esp_err_t cameraError = esp_camera_init(&config);
+    esp_err_t cameraError =
+        esp_camera_init(&config);
 
     if (cameraError != ESP_OK) {
         Serial.printf(
@@ -1021,10 +1201,13 @@ bool initializeCamera() {
         return false;
     }
 
-    sensor_t* sensor = esp_camera_sensor_get();
+    sensor_t* sensor =
+        esp_camera_sensor_get();
 
     if (!sensor) {
-        Serial.println("Could not access camera sensor.");
+        Serial.println(
+            "Could not access camera sensor."
+        );
         return false;
     }
 
@@ -1039,9 +1222,14 @@ bool initializeCamera() {
 #endif
 
     // CNN API resizes to 255 x 255.
-    sensor->set_framesize(sensor, FRAMESIZE_VGA);
+    sensor->set_framesize(
+        sensor,
+        FRAMESIZE_VGA
+    );
 
-    Serial.println("Camera initialized successfully.");
+    Serial.println(
+        "Camera initialized successfully."
+    );
 
     return true;
 }
@@ -1057,23 +1245,54 @@ void setup() {
     delay(1000);
 
     Serial.println();
-    Serial.println("Starting PLink Controller 1...");
+    Serial.println(
+        "Starting PLink Controller 1..."
+    );
 
-    pinMode(IR_SENSOR_PIN, INPUT_PULLUP);
+    pinMode(
+        IR_SENSOR_PIN,
+        INPUT_PULLUP
+    );
 
     // HC-SR04 pins
-    pinMode(HC_PLASTIC_TRIG_PIN, OUTPUT);
-    digitalWrite(HC_PLASTIC_TRIG_PIN, LOW);
-    pinMode(HC_PLASTIC_ECHO_PIN, INPUT);
+    pinMode(
+        HC_PLASTIC_TRIG_PIN,
+        OUTPUT
+    );
+    digitalWrite(
+        HC_PLASTIC_TRIG_PIN,
+        LOW
+    );
 
-    pinMode(HC_PAPER_TRIG_PIN, OUTPUT);
-    digitalWrite(HC_PAPER_TRIG_PIN, LOW);
-    pinMode(HC_PAPER_ECHO_PIN, INPUT);
+    pinMode(
+        HC_PLASTIC_ECHO_PIN,
+        INPUT
+    );
+
+    pinMode(
+        HC_PAPER_TRIG_PIN,
+        OUTPUT
+    );
+    digitalWrite(
+        HC_PAPER_TRIG_PIN,
+        LOW
+    );
+
+    pinMode(
+        HC_PAPER_ECHO_PIN,
+        INPUT
+    );
 
     // Servo
     sorterServo.setPeriodHertz(50);
-    sorterServo.attach(SERVO_PIN, 500, 2400);
-    moveSorterServo(SERVO_CENTER_ANGLE);
+    sorterServo.attach(
+        SERVO_PIN,
+        500,
+        2400
+    );
+    moveSorterServo(
+        SERVO_CENTER_ANGLE
+    );
 
     // RC522 diagnostic initialization.
     // This preserves the current wiring:
@@ -1090,17 +1309,15 @@ void setup() {
     Serial.println("RC522 initialized.");
 
     if (!initializeCamera()) {
-        Serial.println("Stopping: camera initialization failed.");
+        Serial.println(
+            "Stopping: camera initialization failed."
+        );
         return;
     }
 
 #if defined(LED_GPIO_NUM)
     setupLedFlash();
 #endif
-
-    // One-time credential migration (writes fallback to NVS only if
-    // the stored version differs from CREDENTIALS_VERSION). No reboot.
-    migrateWiFiCredentialsIfNeeded();
 
     connectToWiFi();
 
@@ -1109,8 +1326,13 @@ void setup() {
         // only one JPEG per IR trigger.
         startCameraServer();
 
-        Serial.print("Camera server: http://");
-        Serial.println(WiFi.localIP());
+        Serial.print(
+            "Camera server: http://"
+        );
+
+        Serial.println(
+            WiFi.localIP()
+        );
 
         // Check for a queued Wi-Fi configuration once at boot.
         checkRemoteConfiguration();
@@ -1121,11 +1343,17 @@ void setup() {
     }
 
     Serial.println();
-    Serial.println("Controller 1 ready.");
-    Serial.println("Waiting for recyclable...");
+    Serial.println(
+        "Controller 1 ready."
+    );
+
+    Serial.println(
+        "Waiting for recyclable..."
+    );
 
     // Take the first fullness reading after boot.
-    lastBinSensorUpload = millis() - BIN_SENSOR_INTERVAL_MS;
+    lastBinSensorUpload =
+        millis() - BIN_SENSOR_INTERVAL_MS;
 }
 
 // ============================================================
@@ -1135,17 +1363,24 @@ void setup() {
 void loop() {
     maintainWiFi();
 
-    unsigned long nowMs = millis();
+    unsigned long nowMs =
+        millis();
 
-    if (WiFi.status() == WL_CONNECTED &&
-        nowMs - lastConfigCheck >= CONFIG_CHECK_INTERVAL_MS) {
+    if (
+        WiFi.status() == WL_CONNECTED &&
+        nowMs - lastConfigCheck >=
+            CONFIG_CHECK_INTERVAL_MS
+    ) {
         lastConfigCheck = nowMs;
         checkRemoteConfiguration();
     }
 
-    if (WiFi.status() == WL_CONNECTED &&
-        nowMs - lastBinSensorUpload >= BIN_SENSOR_INTERVAL_MS &&
-        !classificationInProgress) {
+    if (
+        WiFi.status() == WL_CONNECTED &&
+        nowMs - lastBinSensorUpload >=
+            BIN_SENSOR_INTERVAL_MS &&
+        !classificationInProgress
+    ) {
         lastBinSensorUpload = nowMs;
         updateBinSensors();
     }
@@ -1155,27 +1390,36 @@ void loop() {
     printRFIDDiagnostic();
 
     bool objectDetected =
-        digitalRead(IR_SENSOR_PIN) == IR_DETECTED_STATE;
+        digitalRead(IR_SENSOR_PIN) ==
+        IR_DETECTED_STATE;
 
     bool cooldownFinished =
-        nowMs - lastCaptureTime >= CAPTURE_COOLDOWN_MS;
+        nowMs - lastCaptureTime >=
+        CAPTURE_COOLDOWN_MS;
 
     // One image per object-presence transition.
-    if (objectDetected &&
+    if (
+        objectDetected &&
         !objectPreviouslyDetected &&
         cooldownFinished &&
-        !classificationInProgress) {
-
+        !classificationInProgress
+    ) {
         Serial.println();
-        Serial.println("IR sensor detected an object.");
+        Serial.println(
+            "IR sensor detected an object."
+        );
 
-        delay(CAPTURE_DELAY_MS);
+        delay(
+            CAPTURE_DELAY_MS
+        );
 
         bool stillPresent =
-            digitalRead(IR_SENSOR_PIN) == IR_DETECTED_STATE;
+            digitalRead(IR_SENSOR_PIN) ==
+            IR_DETECTED_STATE;
 
         if (stillPresent) {
-            bool success = captureAndSendImage();
+            bool success =
+                captureAndSendImage();
 
             Serial.println(
                 success
@@ -1183,14 +1427,18 @@ void loop() {
                     : "Classification failed."
             );
 
-            lastCaptureTime = millis();
+            lastCaptureTime =
+                millis();
         } else {
-            Serial.println("Object disappeared before capture.");
+            Serial.println(
+                "Object disappeared before capture."
+            );
         }
     }
 
     // Sensor must clear before another item can trigger.
-    objectPreviouslyDetected = objectDetected;
+    objectPreviouslyDetected =
+        objectDetected;
 
     delay(50);
 }
