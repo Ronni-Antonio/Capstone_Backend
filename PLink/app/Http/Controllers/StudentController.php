@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Http\Controllers;
 
 use App\Models\Students;
@@ -16,22 +17,49 @@ use Illuminate\Validation\Rule;
 
 class StudentController extends Controller
 {
+    /*
+    |--------------------------------------------------------------------------
+    | RFID Scan Session
+    |--------------------------------------------------------------------------
+    |
+    | Use one cache key for:
+    | - storing the identified student
+    | - frontend polling
+    | - clearing the session
+    |
+    */
+    private const SCAN_SESSION_CACHE_KEY = 'rfid_active_scan_session';
+
     public function index()
     {
         $students = Students::query()
             ->select([
-                'student_id','student_number','first_name','last_name',
-                'grade_level_id','section_id','status','points_balance','created_at'
+                'student_id',
+                'student_number',
+                'first_name',
+                'last_name',
+                'grade_level_id',
+                'section_id',
+                'status',
+                'points_balance',
+                'created_at'
             ])
             ->with([
                 'gradeLevel:grade_level_id,name',
                 'section:section_id,name',
                 'rfidCards' => fn ($q) => $q
-                    ->where('status','active')
-                    ->select('rfid_card_id','student_id','card_uid','status','assigned_at'),
+                    ->where('status', 'active')
+                    ->select(
+                        'rfid_card_id',
+                        'student_id',
+                        'card_uid',
+                        'status',
+                        'assigned_at'
+                    ),
             ])
             ->withSum([
-                'transactions as total_items_recycled' => fn ($q) => $q->where('status','completed')
+                'transactions as total_items_recycled' => fn ($q) =>
+                    $q->where('status', 'completed')
             ], 'total_items')
             ->latest('student_id')
             ->get();
@@ -42,26 +70,38 @@ class StudentController extends Controller
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'student_number'=>'required|string|max:255|unique:students,student_number',
-            'first_name'=>'required|string|max:255',
-            'last_name'=>'required|string|max:255',
-            'grade_level_id'=>'required|exists:grade_levels,grade_level_id',
-            'section_id'=>'required|exists:sections,section_id',
-            'status'=>'nullable|in:active,inactive',
+            'student_number' => 'required|string|max:255|unique:students,student_number',
+            'first_name' => 'required|string|max:255',
+            'last_name' => 'required|string|max:255',
+            'grade_level_id' => 'required|exists:grade_levels,grade_level_id',
+            'section_id' => 'required|exists:sections,section_id',
+            'status' => 'nullable|in:active,inactive',
         ]);
-        $validated['status']=$validated['status'] ?? 'inactive';
-        $validated['points_balance']=0;
 
-        $student = Students::create($validated)->load(['gradeLevel','section','rfidCards']);
+        $validated['status'] = $validated['status'] ?? 'inactive';
+        $validated['points_balance'] = 0;
 
-        $studentName = trim(($student->first_name ?? '') . ' ' . ($student->last_name ?? '')) ?: "Student #{$student->student_id}";
+        $student = Students::create($validated)
+            ->load([
+                'gradeLevel',
+                'section',
+                'rfidCards'
+            ]);
+
+        $studentName = trim(
+            ($student->first_name ?? '') . ' ' .
+            ($student->last_name ?? '')
+        ) ?: "Student #{$student->student_id}";
+
         ActivityLog::record(
             'CREATE_STUDENT',
             "User/student account created for {$studentName} ({$student->student_number}).",
             'Users',
             $request->user()?->id,
             $student->student_id,
-            ['student' => $student->toArray()]
+            [
+                'student' => $student->toArray()
+            ]
         );
 
         return response()->json($student, 201);
@@ -69,116 +109,272 @@ class StudentController extends Controller
 
     public function show(string $id)
     {
-        $student=Students::with([
-            'gradeLevel','section','rfidCards',
+        $student = Students::with([
+            'gradeLevel',
+            'section',
+            'rfidCards',
             'transactions.items.classification.plasticType',
-            'redemptions.reward','pointTransactions'
+            'redemptions.reward',
+            'pointTransactions'
         ])->findOrFail($id);
 
         return response()->json($student);
     }
 
-    public function update(Request $request,string $id)
+    public function update(Request $request, string $id)
     {
-        $student=Students::findOrFail($id);
-        $validated=$request->validate([
-            'student_number'=>['sometimes','string','max:255',Rule::unique('students','student_number')->ignore($student->student_id,'student_id')],
-            'first_name'=>'sometimes|string|max:255',
-            'last_name'=>'sometimes|string|max:255',
-            'grade_level_id'=>'sometimes|exists:grade_levels,grade_level_id',
-            'section_id'=>'sometimes|exists:sections,section_id',
-            'status'=>'sometimes|in:active,inactive',
+        $student = Students::findOrFail($id);
+
+        $validated = $request->validate([
+            'student_number' => [
+                'sometimes',
+                'string',
+                'max:255',
+                Rule::unique(
+                    'students',
+                    'student_number'
+                )->ignore(
+                    $student->student_id,
+                    'student_id'
+                )
+            ],
+            'first_name' => 'sometimes|string|max:255',
+            'last_name' => 'sometimes|string|max:255',
+            'grade_level_id' => 'sometimes|exists:grade_levels,grade_level_id',
+            'section_id' => 'sometimes|exists:sections,section_id',
+            'status' => 'sometimes|in:active,inactive',
         ]);
 
         $changes = [];
-        foreach (['student_number','first_name','last_name','grade_level_id','section_id','status'] as $field) {
-            if (isset($validated[$field]) && $validated[$field] != $student->$field) {
-                $changes[$field] = ['old' => $student->$field, 'new' => $validated[$field]];
+
+        foreach (
+            [
+                'student_number',
+                'first_name',
+                'last_name',
+                'grade_level_id',
+                'section_id',
+                'status'
+            ] as $field
+        ) {
+            if (
+                isset($validated[$field]) &&
+                $validated[$field] != $student->$field
+            ) {
+                $changes[$field] = [
+                    'old' => $student->$field,
+                    'new' => $validated[$field]
+                ];
             }
         }
 
         $student->update($validated);
 
         if (!empty($changes)) {
-            $studentName = trim(($student->first_name ?? '') . ' ' . ($student->last_name ?? '')) ?: "Student #{$student->student_id}";
+            $studentName = trim(
+                ($student->first_name ?? '') . ' ' .
+                ($student->last_name ?? '')
+            ) ?: "Student #{$student->student_id}";
+
             ActivityLog::record(
                 'UPDATE_STUDENT',
-                "User/student information updated for {$studentName}. Changes: " . json_encode($changes),
+                "User/student information updated for {$studentName}. Changes: " .
+                    json_encode($changes),
                 'Users',
                 $request->user()?->id,
                 $student->student_id,
-                ['changes' => $changes]
+                [
+                    'changes' => $changes
+                ]
             );
         }
 
-        return response()->json($student->load(['gradeLevel','section','rfidCards']));
+        return response()->json(
+            $student->load([
+                'gradeLevel',
+                'section',
+                'rfidCards'
+            ])
+        );
     }
 
     public function importCSV(Request $request)
     {
-        $request->validate(['csv_file'=>'required|file|mimes:csv,txt']);
-        $handle=fopen($request->file('csv_file')->getRealPath(),'r');
-        if(!$handle) return response()->json(['error'=>'Failed to open CSV file'],500);
+        $request->validate([
+            'csv_file' => 'required|file|mimes:csv,txt'
+        ]);
 
-        $header=fgetcsv($handle);
-        if(!$header){ fclose($handle); return response()->json(['error'=>'CSV file is empty'],400); }
-        $header=array_map(fn($v)=>strtolower(trim($v)), $header);
-        $required=['student_number','first_name','last_name','grade_level','section'];
-        $missing=array_values(array_diff($required,$header));
-        if($missing){ fclose($handle); return response()->json(['error'=>'Missing required columns','missing'=>$missing],422); }
+        $handle = fopen(
+            $request->file('csv_file')->getRealPath(),
+            'r'
+        );
 
-        $map=array_flip($header); $imported=0; $errors=[]; $rowNo=1;
+        if (!$handle) {
+            return response()->json([
+                'error' => 'Failed to open CSV file'
+            ], 500);
+        }
+
+        $header = fgetcsv($handle);
+
+        if (!$header) {
+            fclose($handle);
+
+            return response()->json([
+                'error' => 'CSV file is empty'
+            ], 400);
+        }
+
+        $header = array_map(
+            fn ($v) => strtolower(trim($v)),
+            $header
+        );
+
+        $required = [
+            'student_number',
+            'first_name',
+            'last_name',
+            'grade_level',
+            'section'
+        ];
+
+        $missing = array_values(
+            array_diff(
+                $required,
+                $header
+            )
+        );
+
+        if ($missing) {
+            fclose($handle);
+
+            return response()->json([
+                'error' => 'Missing required columns',
+                'missing' => $missing
+            ], 422);
+        }
+
+        $map = array_flip($header);
+        $imported = 0;
+        $errors = [];
+        $rowNo = 1;
+
         DB::beginTransaction();
-        try {
-            while(($row=fgetcsv($handle))!==false){
-                $rowNo++;
-                if(!count(array_filter($row,fn($v)=>trim((string)$v)!==''))) continue;
-                $data=[
-                    'student_number'=>trim($row[$map['student_number']]??''),
-                    'first_name'=>trim($row[$map['first_name']]??''),
-                    'last_name'=>trim($row[$map['last_name']]??''),
-                    'grade_level'=>trim($row[$map['grade_level']]??''),
-                    'section'=>trim($row[$map['section']]??''),
-                ];
-                $v=Validator::make($data,[
-                    'student_number'=>'required|string|max:255|unique:students,student_number',
-                    'first_name'=>'required|string|max:255',
-                    'last_name'=>'required|string|max:255',
-                    'grade_level'=>'required|string|max:255',
-                    'section'=>'required|string|max:255',
-                ]);
-                if($v->fails()){ $errors[]=['row'=>$rowNo,'data'=>$data,'errors'=>$v->errors()->all()]; continue; }
 
-                $grade=GradeLevel::firstOrCreate(['name'=>$data['grade_level']]);
-                $section=Section::firstOrCreate(['name'=>$data['section']]);
+        try {
+            while (($row = fgetcsv($handle)) !== false) {
+                $rowNo++;
+
+                if (
+                    !count(
+                        array_filter(
+                            $row,
+                            fn ($v) =>
+                                trim((string) $v) !== ''
+                        )
+                    )
+                ) {
+                    continue;
+                }
+
+                $data = [
+                    'student_number' => trim(
+                        $row[$map['student_number']] ?? ''
+                    ),
+                    'first_name' => trim(
+                        $row[$map['first_name']] ?? ''
+                    ),
+                    'last_name' => trim(
+                        $row[$map['last_name']] ?? ''
+                    ),
+                    'grade_level' => trim(
+                        $row[$map['grade_level']] ?? ''
+                    ),
+                    'section' => trim(
+                        $row[$map['section']] ?? ''
+                    ),
+                ];
+
+                $v = Validator::make(
+                    $data,
+                    [
+                        'student_number' =>
+                            'required|string|max:255|unique:students,student_number',
+                        'first_name' =>
+                            'required|string|max:255',
+                        'last_name' =>
+                            'required|string|max:255',
+                        'grade_level' =>
+                            'required|string|max:255',
+                        'section' =>
+                            'required|string|max:255',
+                    ]
+                );
+
+                if ($v->fails()) {
+                    $errors[] = [
+                        'row' => $rowNo,
+                        'data' => $data,
+                        'errors' => $v->errors()->all()
+                    ];
+
+                    continue;
+                }
+
+                $grade = GradeLevel::firstOrCreate([
+                    'name' => $data['grade_level']
+                ]);
+
+                $section = Section::firstOrCreate([
+                    'name' => $data['section']
+                ]);
 
                 $student = Students::create([
-                    'student_number'=>$data['student_number'],
-                    'first_name'=>$data['first_name'],
-                    'last_name'=>$data['last_name'],
-                    'grade_level_id'=>$grade->grade_level_id,
-                    'section_id'=>$section->section_id,
-                    'status'=>'inactive',
-                    'points_balance'=>0,
+                    'student_number' =>
+                        $data['student_number'],
+                    'first_name' =>
+                        $data['first_name'],
+                    'last_name' =>
+                        $data['last_name'],
+                    'grade_level_id' =>
+                        $grade->grade_level_id,
+                    'section_id' =>
+                        $section->section_id,
+                    'status' =>
+                        'inactive',
+                    'points_balance' =>
+                        0,
                 ]);
 
-                $studentName = trim(($student->first_name ?? '') . ' ' . ($student->last_name ?? '')) ?: "Student #{$student->student_id}";
+                $studentName = trim(
+                    ($student->first_name ?? '') . ' ' .
+                    ($student->last_name ?? '')
+                ) ?: "Student #{$student->student_id}";
+
                 ActivityLog::record(
                     'CREATE_STUDENT',
                     "Student account created via CSV import for {$studentName} ({$student->student_number}).",
                     'Users',
                     $request->user()?->id,
                     $student->student_id,
-                    ['imported_via' => 'csv']
+                    [
+                        'imported_via' => 'csv'
+                    ]
                 );
 
                 $imported++;
             }
+
             DB::commit();
-        } catch(\Throwable $e){
-            DB::rollBack(); fclose($handle);
-            return response()->json(['error'=>$e->getMessage()],500);
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            fclose($handle);
+
+            return response()->json([
+                'error' => $e->getMessage()
+            ], 500);
         }
+
         fclose($handle);
 
         if ($imported > 0) {
@@ -188,168 +384,386 @@ class StudentController extends Controller
                 'Users',
                 $request->user()?->id,
                 null,
-                ['imported_count' => $imported, 'error_count' => count($errors)]
+                [
+                    'imported_count' => $imported,
+                    'error_count' => count($errors)
+                ]
             );
         }
 
-        return response()->json(['success'=>true,'imported'=>$imported,'errors'=>$errors]);
+        return response()->json([
+            'success' => true,
+            'imported' => $imported,
+            'errors' => $errors
+        ]);
     }
 
     public function assignCard(Request $request)
     {
-        $validated=$request->validate([
-            'student_id'=>'required|exists:students,student_id',
-            'card_uid'=>'required|string|max:100|unique:rfid_cards,card_uid',
+        $validated = $request->validate([
+            'student_id' =>
+                'required|exists:students,student_id',
+            'card_uid' =>
+                'required|string|max:100|unique:rfid_cards,card_uid',
         ]);
-        $card=DB::transaction(function() use($validated,$request){
-            $student=Students::lockForUpdate()->findOrFail($validated['student_id']);
-            RfidCard::where('student_id',$student->student_id)->where('status','active')->update(['status'=>'unassigned']);
-            $card=RfidCard::create([
-                'student_id'=>$student->student_id,'card_uid'=>strtoupper(trim($validated['card_uid'])),
-                'status'=>'active','assigned_at'=>now()
-            ]);
-            $oldStatus = $student->status;
-            $student->update(['status'=>'active']);
 
-            $studentName = trim(($student->first_name ?? '') . ' ' . ($student->last_name ?? '')) ?: "Student #{$student->student_id}";
-            ActivityLog::record(
-                'ASSIGN_RFID_CARD',
-                "RFID card assigned to {$studentName}. Card UID: {$validated['card_uid']}.",
-                'Machine',
-                $request->user()?->id,
-                $student->student_id,
-                ['card_uid' => $validated['card_uid'], 'old_status' => $oldStatus, 'new_status' => 'active']
-            );
+        $card = DB::transaction(
+            function () use ($validated, $request) {
+                $student = Students::lockForUpdate()
+                    ->findOrFail(
+                        $validated['student_id']
+                    );
 
-            return $card;
-        });
-        return response()->json(['status'=>'success','message'=>'Card paired successfully','card'=>$card],201);
-    }
+                RfidCard::where(
+                    'student_id',
+                    $student->student_id
+                )
+                    ->where(
+                        'status',
+                        'active'
+                    )
+                    ->update([
+                        'status' => 'unassigned'
+                    ]);
 
-    public function activate(string $id, IotCommandService $commands)
-    {
-        $student = Students::findOrFail($id);
+                $card = RfidCard::create([
+                    'student_id' =>
+                        $student->student_id,
+                    'card_uid' =>
+                        strtoupper(
+                            trim(
+                                $validated['card_uid']
+                            )
+                        ),
+                    'status' =>
+                        'active',
+                    'assigned_at' =>
+                        now()
+                ]);
 
-        $command = $commands->queue('controller-2', 'assign_card', [
-            'student_id' => (int) $student->student_id,
-            'student_number' => $student->student_number,
-            'student_name' => trim(($student->first_name ?? '') . ' ' . ($student->last_name ?? '')),
-        ], 180);
+                $oldStatus = $student->status;
+
+                $student->update([
+                    'status' => 'active'
+                ]);
+
+                $studentName = trim(
+                    ($student->first_name ?? '') . ' ' .
+                    ($student->last_name ?? '')
+                ) ?: "Student #{$student->student_id}";
+
+                ActivityLog::record(
+                    'ASSIGN_RFID_CARD',
+                    "RFID card assigned to {$studentName}. Card UID: {$validated['card_uid']}.",
+                    'Machine',
+                    $request->user()?->id,
+                    $student->student_id,
+                    [
+                        'card_uid' =>
+                            $validated['card_uid'],
+                        'old_status' =>
+                            $oldStatus,
+                        'new_status' =>
+                            'active'
+                    ]
+                );
+
+                return $card;
+            }
+        );
 
         return response()->json([
-            'message' => 'RFID assignment queued. Please tap the student card on Controller 2.',
-            'student_id' => (int) $student->student_id,
-            'command_id' => (int) $command->command_id,
-            'status' => $command->status,
+            'status' => 'success',
+            'message' => 'Card paired successfully',
+            'card' => $card
+        ], 201);
+    }
+
+    public function activate(
+        string $id,
+        IotCommandService $commands
+    ) {
+        $student = Students::findOrFail($id);
+
+        $command = $commands->queue(
+            'controller-2',
+            'assign_card',
+            [
+                'student_id' =>
+                    (int) $student->student_id,
+                'student_number' =>
+                    $student->student_number,
+                'student_name' =>
+                    trim(
+                        ($student->first_name ?? '') . ' ' .
+                        ($student->last_name ?? '')
+                    ),
+            ],
+            180
+        );
+
+        return response()->json([
+            'message' =>
+                'RFID assignment queued. Please tap the student card on Controller 2.',
+            'student_id' =>
+                (int) $student->student_id,
+            'command_id' =>
+                (int) $command->command_id,
+            'status' =>
+                $command->status,
         ]);
     }
 
     public function activateStatus(string $id)
     {
-        $student = Students::with('rfidCards')->findOrFail($id);
-        $active = $student->rfidCards->contains(fn ($card) => $card->status === 'active');
+        $student = Students::with('rfidCards')
+            ->findOrFail($id);
 
-        $command = \App\Models\IotControllerCommand::query()
-            ->where('controller_code', 'controller-2')
-            ->where('command_type', 'assign_card')
-            ->where('payload->student_id', (int) $student->student_id)
-            ->latest('command_id')
-            ->first();
+        $active = $student->rfidCards->contains(
+            fn ($card) =>
+                $card->status === 'active'
+        );
+
+        $command =
+            \App\Models\IotControllerCommand::query()
+                ->where(
+                    'controller_code',
+                    'controller-2'
+                )
+                ->where(
+                    'command_type',
+                    'assign_card'
+                )
+                ->where(
+                    'payload->student_id',
+                    (int) $student->student_id
+                )
+                ->latest('command_id')
+                ->first();
 
         return response()->json([
-            'status' => $active ? 'success' : 'pending',
-            'command_status' => $command?->status,
-            'command_id' => $command?->command_id,
+            'status' =>
+                $active ? 'success' : 'pending',
+            'command_status' =>
+                $command?->status,
+            'command_id' =>
+                $command?->command_id,
         ]);
     }
 
-    public function cancelActivation(string $id, IotCommandService $commands)
-    {
-        $commands->cancelOutstanding('controller-2', 'assign_card');
+    public function cancelActivation(
+        string $id,
+        IotCommandService $commands
+    ) {
+        $commands->cancelOutstanding(
+            'controller-2',
+            'assign_card'
+        );
 
         return response()->json([
             'success' => true,
-            'message' => 'RFID assignment cancelled.',
+            'message' =>
+                'RFID assignment cancelled.',
         ]);
     }
 
-    public function identifyCard(Request $request, RecyclingClaimService $recyclingClaims)
-    {
+    /*
+    |--------------------------------------------------------------------------
+    | IDENTIFY STUDENT
+    |--------------------------------------------------------------------------
+    |
+    | Controller 2 sends the RFID UID here.
+    |
+    | Once the student is found, we store the entire response in the cache.
+    | The Rewards frontend polls checkActiveScanSession() and retrieves it.
+    |
+    */
+    public function identifyCard(
+        Request $request,
+        RecyclingClaimService $recyclingClaims
+    ) {
         $validated = $request->validate([
-            'card_uid' => 'required|string|max:100',
+            'card_uid' =>
+                'required|string|max:100',
         ]);
 
-        $card = RfidCard::with(['student.gradeLevel', 'student.section'])
-            ->where('card_uid', strtoupper(trim($validated['card_uid'])))
-            ->where('status', 'active')
+        $card = RfidCard::with([
+            'student.gradeLevel',
+            'student.section'
+        ])
+            ->where(
+                'card_uid',
+                strtoupper(
+                    trim(
+                        $validated['card_uid']
+                    )
+                )
+            )
+            ->where(
+                'status',
+                'active'
+            )
             ->first();
 
         if (!$card) {
             return response()->json([
-                'error' => 'Unrecognized or inactive card.',
+                'error' =>
+                    'Unrecognized or inactive card.',
             ], 404);
         }
 
-        // If Controller 1 has a recent waiting-for-RFID recycling session,
-        // this normal RFID tap claims that session and awards the accumulated
-        // points. If there is no pending session, this remains a normal
-        // student identification tap for Rewards and other UI flows.
-        $recyclingClaim = $recyclingClaims->claimLatestForCard($validated['card_uid']);
+        /*
+         * If Controller 1 has a recent recycling session
+         * waiting for an RFID card, this will claim it.
+         *
+         * Otherwise this remains a normal student
+         * identification tap for the Rewards UI.
+         */
+        $recyclingClaim =
+            $recyclingClaims->claimLatestForCard(
+                $validated['card_uid']
+            );
 
-        $student = $card->student?->fresh(['gradeLevel', 'section', 'rfidCards']);
+        $student = $card->student?->fresh([
+            'gradeLevel',
+            'section',
+            'rfidCards'
+        ]);
+
         if (!$student) {
             return response()->json([
-                'error' => 'RFID card has no linked student.',
+                'error' =>
+                    'RFID card has no linked student.',
             ], 404);
         }
 
         $payload = [
             'success' => true,
-            'student_id' => (int) $student->student_id,
-            'rfid_card_id' => (int) $card->rfid_card_id,
-            'points_balance' => (int) $student->points_balance,
-            'student' => $student,
-            'recycling_claim' => $recyclingClaim,
+
+            'student_id' =>
+                (int) $student->student_id,
+
+            'rfid_card_id' =>
+                (int) $card->rfid_card_id,
+
+            'points_balance' =>
+                (int) $student->points_balance,
+
+            'student' =>
+                $student,
+
+            'recycling_claim' =>
+                $recyclingClaim,
         ];
 
-        // Keep the existing short-lived web scan session used by the Rewards UI.
-        cache()->put('plink.active_scan_session', $payload, now()->addMinutes(2));
+        /*
+         * ==========================================
+         * SCAN SESSION FIX
+         * ==========================================
+         *
+         * Previously:
+         *
+         * cache()->put(
+         *     'plink.active_scan_session',
+         *     ...
+         * );
+         *
+         * But the frontend polling endpoint was
+         * looking for:
+         *
+         * rfid_active_scan_session
+         *
+         * Now all methods use exactly the same key.
+         */
+        Cache::put(
+            self::SCAN_SESSION_CACHE_KEY,
+            $payload,
+            now()->addMinutes(2)
+        );
 
         return response()->json($payload);
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | FRONTEND SCAN POLLING
+    |--------------------------------------------------------------------------
+    |
+    | The Rewards frontend calls this while waiting
+    | for Controller 2 to identify an RFID card.
+    |
+    */
     public function checkActiveScanSession()
     {
-        $payload = Cache::get('rfid_active_scan_session');
+        $payload = Cache::get(
+            self::SCAN_SESSION_CACHE_KEY
+        );
 
         if (!$payload) {
-            return response()->json(['student_found'=>false,'student'=>null]);
+            return response()->json([
+                'student_found' => false,
+                'student' => null,
+            ]);
         }
 
         return response()->json([
             'student_found' => true,
-            'student' => $payload['student'] ?? null,
-            'student_id' => $payload['student_id'] ?? null,
-            'points_balance' => $payload['points_balance'] ?? 0,
+
+            'student' =>
+                $payload['student'] ?? null,
+
+            'student_id' =>
+                $payload['student_id'] ?? null,
+
+            'points_balance' =>
+                $payload['points_balance'] ?? 0,
+
             'success' => true,
         ]);
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | CLEAR SCAN SESSION
+    |--------------------------------------------------------------------------
+    */
     public function clearScanSession()
     {
-        Cache::forget('rfid_active_scan_session');
-        return response()->json(['success'=>true]);
+        Cache::forget(
+            self::SCAN_SESSION_CACHE_KEY
+        );
+
+        return response()->json([
+            'success' => true
+        ]);
     }
 
     public function destroy(string $id)
     {
-        $student=Students::findOrFail($id);
-        if($student->transactions()->exists() || $student->pointTransactions()->exists() || $student->redemptions()->exists()){
-            return response()->json(['error'=>'Student has historical records and cannot be deleted. Set status to inactive instead.'],409);
+        $student = Students::findOrFail($id);
+
+        if (
+            $student->transactions()->exists() ||
+            $student->pointTransactions()->exists() ||
+            $student->redemptions()->exists()
+        ) {
+            return response()->json([
+                'error' =>
+                    'Student has historical records and cannot be deleted. Set status to inactive instead.'
+            ], 409);
         }
-        $studentName = trim(($student->first_name ?? '') . ' ' . ($student->last_name ?? '')) ?: "Student #{$student->student_id}";
-        $studentNumber = $student->student_number;
-        $studentId = $student->student_id;
+
+        $studentName = trim(
+            ($student->first_name ?? '') . ' ' .
+            ($student->last_name ?? '')
+        ) ?: "Student #{$student->student_id}";
+
+        $studentNumber =
+            $student->student_number;
+
+        $studentId =
+            $student->student_id;
+
         $student->delete();
 
         ActivityLog::record(
@@ -358,9 +772,16 @@ class StudentController extends Controller
             'Users',
             request()->user()?->id,
             null,
-            ['student_id' => $studentId, 'student_number' => $studentNumber, 'student_name' => $studentName]
+            [
+                'student_id' =>
+                    $studentId,
+                'student_number' =>
+                    $studentNumber,
+                'student_name' =>
+                    $studentName
+            ]
         );
 
-        return response()->json(null,204);
+        return response()->json(null, 204);
     }
 }
