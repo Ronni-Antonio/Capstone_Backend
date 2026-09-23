@@ -26,8 +26,8 @@ static const char* CONTROLLER_CODE = "controller-2";
 static const char* DEVICE_KEY = "4ba00b9849eaeb6fdce45fb85e95f4326166014c50ba10d3843a32e6d72f4ab1";
 
 // Used only on first boot / when NVS has no saved credentials yet.
-static const char* DEFAULT_WIFI_SSID = "GlobeAtHome_38756_2.4";
-static const char* DEFAULT_WIFI_PASSWORD = "Shinchan215";
+static const char* DEFAULT_WIFI_SSID = "Roni :3";
+static const char* DEFAULT_WIFI_PASSWORD = "p00pyp4nt5";
 
 static const unsigned long COMMAND_POLL_INTERVAL_MS = 1500;
 static const unsigned long CONFIG_POLL_INTERVAL_MS  = 60000;
@@ -298,7 +298,9 @@ void acknowledgeCommand(long commandId, const char* status, const String& messag
 }
 
 void pollNextCommand() {
-  if (WiFi.status() != WL_CONNECTED || currentMode != MODE_IDLE) return;
+  // Poll even while waiting for a card. This lets a frontend cancellation
+  // clear a claimed redemption command on the ESP32 within one poll cycle.
+  if (WiFi.status() != WL_CONNECTED) return;
 
   WiFiClientSecure client;
   client.setInsecure();
@@ -323,10 +325,29 @@ void pollNextCommand() {
 
   JsonDocument doc;
   DeserializationError error = deserializeJson(doc, response);
-  if (error || !(doc["has_command"] | false)) return;
+  if (error) return;
+
+  // If Laravel no longer reports our claimed command, it was cancelled,
+  // expired, failed, or completed elsewhere. Clear local mode so the next
+  // RFID tap is not accidentally consumed by a stale redemption.
+  if (!(doc["has_command"] | false)) {
+    if (currentMode != MODE_IDLE && currentCommandId != 0) {
+      Serial.printf("Command #%ld is no longer active. Clearing local command state.\n", currentCommandId);
+      clearCurrentCommand();
+    }
+    return;
+  }
 
   JsonObject command = doc["command"];
-  currentCommandId = command["command_id"] | 0;
+  long incomingCommandId = command["command_id"] | 0;
+
+  // The backend intentionally re-returns claimed commands until completion.
+  // Do not restart the timer or reinitialize the same local command.
+  if (currentMode != MODE_IDLE && incomingCommandId == currentCommandId) {
+    return;
+  }
+
+  currentCommandId = incomingCommandId;
   String commandType = command["command_type"] | "";
   JsonObject payload = command["payload"];
   currentCommandStartedAt = millis();
@@ -406,6 +427,10 @@ void confirmRedemption(const String& cardUid) {
   addDeviceHeaders(http, true);
 
   JsonDocument doc;
+  // command_id is the idempotency key for this exact redemption attempt.
+  // If this POST is retried, Laravel will return success without deducting
+  // points or stock a second time.
+  doc["command_id"] = currentCommandId;
   doc["student_id"] = pendingStudentId;
   doc["reward_id"] = pendingRewardId;
   doc["card_uid"] = cardUid;
