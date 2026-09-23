@@ -132,6 +132,7 @@ Route::get('inventory', [RewardController::class, 'inventory']);
 
 Route::get('redemptions/initiate/{student_id}/{reward_id}/status', [RedemptionController::class, 'checkRedemptionStatus']);
 Route::post('redemptions/initiate/{student_id}/{reward_id}', [RedemptionController::class, 'initiateRedemptionProcess']);
+Route::post('redemptions/commands/{command_id}/cancel', [RedemptionController::class, 'cancelRedemptionProcess']);
 Route::resource('redemptions', RedemptionController::class)->except(['create', 'edit']);
 
 Route::resource('collections', CollectionController::class)->except(['create', 'edit']);
