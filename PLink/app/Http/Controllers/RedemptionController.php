@@ -10,6 +10,7 @@ use App\Models\Rewards;
 use App\Models\RfidCard;
 use App\Models\Students;
 use App\Services\IotCommandService;
+use App\Services\RewardStockAlertService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -40,7 +41,7 @@ class RedemptionController extends Controller
      * as the idempotency key. If the same command is retried, points and stock
      * are NOT deducted a second time.
      */
-    public function store(Request $request)
+    public function store(Request $request, RewardStockAlertService $stockAlerts)
     {
         $validated = $request->validate([
             'student_id' => 'required|exists:students,student_id',
@@ -65,7 +66,7 @@ class RedemptionController extends Controller
             : null;
 
         try {
-            $result = DB::transaction(function () use ($validated, $rewardIds, $commandId, $request) {
+            $result = DB::transaction(function () use ($validated, $rewardIds, $commandId, $request, $stockAlerts) {
                 $command = null;
 
                 if ($commandId !== null) {
@@ -187,7 +188,11 @@ class RedemptionController extends Controller
                         $created[] = $redemption;
                     }
 
+                    $oldStock = (int) $reward->stock_quantity;
+                    $oldThreshold = (int) ($reward->low_stock_threshold ?? 10);
                     $reward->decrement('stock_quantity', $quantity);
+                    $reward->refresh();
+                    $stockAlerts->sync($reward, $oldStock, $oldThreshold);
 
                     $redeemedItems[] = [
                         'name' => $reward->reward_name,

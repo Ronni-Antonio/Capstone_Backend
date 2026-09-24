@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\Rewards;
 use App\Models\ActivityLog;
+use App\Services\RewardStockAlertService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
@@ -23,7 +24,7 @@ class RewardController extends Controller
         return response()->json($query->latest('reward_id')->get());
     }
 
-    public function store(Request $request)
+    public function store(Request $request, RewardStockAlertService $stockAlerts)
     {
         $v = $request->validate([
             'reward_name'    => 'required|string|max:255',
@@ -31,6 +32,7 @@ class RewardController extends Controller
             'points_cost'    => 'required|integer|min:1',
             'unit_price'     => 'required|numeric|min:0',
             'stock_quantity' => 'required|integer|min:0',
+            'low_stock_threshold' => 'sometimes|integer|min:0|max:1000000',
             'is_active'      => 'sometimes|boolean',
         ]);
 
@@ -38,6 +40,7 @@ class RewardController extends Controller
         $v['last_restock'] = $initialStock > 0 ? now() : null;
 
         $reward = Rewards::create($v);
+        $stockAlerts->sync($reward);
 
         ActivityLog::record(
             'ADD_REWARD',
@@ -119,6 +122,8 @@ class RewardController extends Controller
             'unit_price' => $unitPrice,
             'remaining_stocks' => $stock,
             'stock_quantity' => $stock,
+            'low_stock_threshold' => (int) ($reward->low_stock_threshold ?? 10),
+            'inventory_status' => $stock <= 0 ? 'out_of_stock' : ($stock <= (int) ($reward->low_stock_threshold ?? 10) ? 'low_stock' : 'in_stock'),
             'total_stocks_on_hand' => $stock,
             'total_price' => round($stock * $unitPrice, 2),
             'last_restock' => optional($reward->last_restock)->toIso8601String(),
@@ -318,10 +323,11 @@ class RewardController extends Controller
         return response()->json(Rewards::findOrFail($id));
     }
 
-    public function update(Request $request, string $id)
+    public function update(Request $request, string $id, RewardStockAlertService $stockAlerts)
     {
         $r = Rewards::findOrFail($id);
         $oldStock = (int) $r->stock_quantity;
+        $oldThreshold = (int) ($r->low_stock_threshold ?? 10);
 
         $validated = $request->validate([
             'reward_name'    => 'sometimes|string|max:255',
@@ -329,6 +335,7 @@ class RewardController extends Controller
             'points_cost'    => 'sometimes|integer|min:1',
             'unit_price'     => 'sometimes|numeric|min:0',
             'stock_quantity' => 'sometimes|integer|min:0',
+            'low_stock_threshold' => 'sometimes|integer|min:0|max:1000000',
             'is_active'      => 'sometimes|boolean',
         ]);
 
@@ -348,6 +355,9 @@ class RewardController extends Controller
         if (isset($validated['stock_quantity']) && (int) $validated['stock_quantity'] !== $oldStock) {
             $changes['stock_quantity'] = ['old' => $oldStock, 'new' => (int) $validated['stock_quantity']];
         }
+        if (isset($validated['low_stock_threshold']) && (int) $validated['low_stock_threshold'] !== $oldThreshold) {
+            $changes['low_stock_threshold'] = ['old' => $oldThreshold, 'new' => (int) $validated['low_stock_threshold']];
+        }
         if (isset($validated['is_active']) && (bool) $validated['is_active'] !== (bool) $r->is_active) {
             $changes['is_active'] = ['old' => $r->is_active, 'new' => $validated['is_active']];
         }
@@ -361,6 +371,11 @@ class RewardController extends Controller
         }
 
         $r->update($validated);
+        $r->refresh();
+
+        if (isset($changes['stock_quantity']) || isset($changes['low_stock_threshold'])) {
+            $stockAlerts->sync($r, $oldStock, $oldThreshold);
+        }
 
         $name = $r->reward_name;
         $userId = $request->user()?->id;
@@ -403,6 +418,54 @@ class RewardController extends Controller
         }
 
         return response()->json($r);
+    }
+
+    public function addStock(Request $request, string $id, RewardStockAlertService $stockAlerts)
+    {
+        $validated = $request->validate([
+            'quantity' => 'required|integer|min:1|max:1000000',
+        ]);
+
+        $quantity = (int) $validated['quantity'];
+        $userId = $request->user()?->id;
+
+        $reward = DB::transaction(function () use ($id, $quantity, $userId, $stockAlerts) {
+            $reward = Rewards::query()->lockForUpdate()->findOrFail($id);
+            $oldStock = (int) $reward->stock_quantity;
+            $oldThreshold = (int) ($reward->low_stock_threshold ?? 10);
+            $newStock = $oldStock + $quantity;
+
+            $reward->update([
+                'stock_quantity' => $newStock,
+                'last_restock' => now(),
+            ]);
+            $reward->refresh();
+
+            ActivityLog::record(
+                'RESTOCK_INVENTORY',
+                "Inventory for \"{$reward->reward_name}\" was restocked by {$quantity} units ({$oldStock} → {$newStock}).",
+                'Inventory',
+                $userId,
+                null,
+                [
+                    'reward_id' => (int) $reward->reward_id,
+                    'quantity_added' => $quantity,
+                    'old' => $oldStock,
+                    'new' => $newStock,
+                ]
+            );
+
+            $stockAlerts->sync($reward, $oldStock, $oldThreshold);
+
+            return $reward;
+        });
+
+        return response()->json([
+            'success' => true,
+            'message' => "Added {$quantity} unit" . ($quantity === 1 ? '' : 's') . " to {$reward->reward_name}.",
+            'reward' => $reward,
+            'inventory' => $this->transformInventoryRow($reward),
+        ]);
     }
 
     public function destroy(string $id)
