@@ -118,6 +118,7 @@ Route::get('rewards/inventory/categories', [RewardController::class, 'inventoryC
 Route::get('rewards/inventory/export', [RewardController::class, 'inventoryExport']);
 Route::get('rewards/inventory/pdf-data', [RewardController::class, 'inventoryPdfData']);
 Route::get('rewards/inventory', [RewardController::class, 'inventory']);
+Route::post('rewards/{id}/add-stock', [RewardController::class, 'addStock']);
 Route::resource('rewards', RewardController::class)->except(['create', 'edit']);
 
 /*
