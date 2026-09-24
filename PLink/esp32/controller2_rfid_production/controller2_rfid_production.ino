@@ -26,8 +26,8 @@ static const char* CONTROLLER_CODE = "controller-2";
 static const char* DEVICE_KEY = "4ba00b9849eaeb6fdce45fb85e95f4326166014c50ba10d3843a32e6d72f4ab1";
 
 // Used only on first boot / when NVS has no saved credentials yet.
-static const char* DEFAULT_WIFI_SSID = "Roni :3";
-static const char* DEFAULT_WIFI_PASSWORD = "p00pyp4nt5";
+static const char* DEFAULT_WIFI_SSID = "GlobeAtHome38756_2.4";
+static const char* DEFAULT_WIFI_PASSWORD = "Shinchan215";
 
 static const unsigned long COMMAND_POLL_INTERVAL_MS = 1500;
 static const unsigned long CONFIG_POLL_INTERVAL_MS  = 60000;

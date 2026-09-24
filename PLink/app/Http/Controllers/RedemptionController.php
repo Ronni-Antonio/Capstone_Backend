@@ -261,7 +261,9 @@ class RedemptionController extends Controller
                     'command_status' => $command ? 'completed' : null,
                     'redemption_group' => $group,
                     'total_points_spent' => $total,
-                    'redemptions' => collect($created)->load('reward'),
+                    'redemptions' => collect($created)
+                        ->map(fn ($redemption) => $redemption->load('reward'))
+                        ->values(),
                     'student' => $student->fresh(),
                 ];
             });
