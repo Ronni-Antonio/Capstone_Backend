@@ -27,6 +27,13 @@ static const char* API_BASE =
 static const char* CLASSIFICATION_URL =
     "https://plink-api.barabesta.is/api/iot/classify";
 
+// Laravel claims the waiting recycling session inside the normal
+// "identify card" call (StudentController::identifyCard ->
+// RecyclingClaimService). A claim happened only if the response contains
+// a non-null "recycling_claim".
+static const char* CLAIM_PATH = "/students/identify-card";
+const unsigned long RFID_DEBOUNCE_MS = 3000;
+
 // ============================================================
 // FALLBACK WI-FI
 // ============================================================
@@ -42,8 +49,25 @@ static const char* FALLBACK_PASSWORD =
 // ============================================================
 
 
-#define IR_SENSOR_PIN 42
-#define IR_DETECTED_STATE LOW
+// HC-SR04 #3: CHUTE / item detection (replaces the old IR sensor)
+#define HC_CHUTE_TRIG_PIN 14
+#define HC_CHUTE_ECHO_PIN 21
+
+// Item is "present" when closer than DETECT cm, "gone" when farther than CLEAR cm
+// (or no echo). TUNE these to your chute geometry.
+const float ITEM_DETECT_THRESHOLD_CM = 15.0f;
+const float ITEM_CLEAR_THRESHOLD_CM  = 20.0f;
+
+// Water sensor module, DO pin. Most LM393 modules pull DO LOW when wet.
+// Flip WATER_WET_STATE to HIGH if yours behaves the opposite way.
+#define WATER_SENSOR_PIN 42
+#define WATER_WET_STATE  LOW
+
+// Active buzzer, driven through an NPN transistor (active HIGH).
+// For a low-trigger buzzer module swap these two.
+#define BUZZER_PIN       48
+#define BUZZER_ON_STATE  HIGH
+#define BUZZER_OFF_STATE LOW
 
 // Existing RC522 wiring from the current hardware diagram.
 #define RFID_SS_PIN   41
@@ -145,7 +169,14 @@ void moveSorterServo(
     int angle
 );
 
-void printRFIDDiagnostic();
+void beepComplete();
+void beepReject();
+void beepClaim();
+void beepError();
+bool updateItemPresence();
+bool itemStillPresent();
+bool isItemWet();
+void handleRFIDClaim();
 
 // ============================================================
 // HTTPS HELPER
@@ -542,7 +573,7 @@ void handleClassificationResponse(
     Serial.println(sessionPoints);
 
     Serial.println(
-        "Tap RFID on Controller 2 when finished."
+        "Tap your RFID card on this unit when finished."
     );
 
     Serial.println(
@@ -568,33 +599,31 @@ void moveSorterServo(int angle) {
 }
 
 void routeClassifiedItem(const String& compartment) {
+    int targetAngle = -1;
+
     if (compartment == "plastic") {
         Serial.println("Routing item: PLASTIC -> LEFT");
+        targetAngle = SERVO_PLASTIC_ANGLE;
+    } else if (compartment == "paper") {
+        Serial.println("Routing item: PAPER -> RIGHT");
+        targetAngle = SERVO_PAPER_ANGLE;
+    }
 
-        moveSorterServo(SERVO_PLASTIC_ANGLE);
-        delay(SERVO_HOLD_MS);
-
+    if (targetAngle < 0) {
+        Serial.println("Routing item: REJECT / UNKNOWN -> CENTER");
         moveSorterServo(SERVO_CENTER_ANGLE);
-        Serial.println("Sorter returned to CENTER.");
+        beepReject();
         return;
     }
 
-    if (compartment == "paper") {
-        Serial.println("Routing item: WHITE PAPER -> RIGHT");
-
-        moveSorterServo(SERVO_PAPER_ANGLE);
-        delay(SERVO_HOLD_MS);
-
-        moveSorterServo(SERVO_CENTER_ANGLE);
-        Serial.println("Sorter returned to CENTER.");
-        return;
-    }
-
-    Serial.println(
-        "Routing item: REJECT / UNKNOWN -> CENTER"
-    );
+    moveSorterServo(targetAngle);
+    delay(SERVO_HOLD_MS);
 
     moveSorterServo(SERVO_CENTER_ANGLE);
+    Serial.println("Sorter returned to CENTER.");
+
+    // Step 4: item has dropped into its compartment.
+    beepComplete();
 }
 
 // ============================================================
@@ -949,13 +978,183 @@ void updateBinSensors() {
 }
 
 // ============================================================
-// RFID DIAGNOSTIC
+// BUZZER
 // ============================================================
-// Controller 2 remains responsible for student identification and
-// reward claiming. Controller 1 only initializes the RC522 and can
-// report a UID for wiring diagnostics.
 
-void printRFIDDiagnostic() {
+void buzzerPulse(unsigned int onMs, unsigned int offMs, int count) {
+    for (int i = 0; i < count; i++) {
+        digitalWrite(BUZZER_PIN, BUZZER_ON_STATE);
+        delay(onMs);
+        digitalWrite(BUZZER_PIN, BUZZER_OFF_STATE);
+
+        if (i < count - 1) {
+            delay(offMs);
+        }
+    }
+}
+
+// One long beep: item accepted and dropped into its compartment.
+void beepComplete() { buzzerPulse(400, 0, 1); }
+
+// Three short beeps: item rejected (wet / unknown).
+void beepReject() { buzzerPulse(120, 100, 3); }
+
+// Two medium beeps: points claimed.
+void beepClaim() { buzzerPulse(200, 150, 2); }
+
+// One very long beep: error (network / backend / card not accepted).
+void beepError() { buzzerPulse(900, 0, 1); }
+
+// ============================================================
+// CHUTE DETECTION (HC #3) + WATER SENSOR
+// ============================================================
+
+// Called every loop. Needs 2 consecutive close readings to report
+// "present" and 3 consecutive far/no-echo readings to report "gone".
+bool updateItemPresence() {
+    static bool present = false;
+    static int hits = 0;
+    static int misses = 0;
+
+    float d = readUltrasonicDistanceCM(
+        HC_CHUTE_TRIG_PIN,
+        HC_CHUTE_ECHO_PIN
+    );
+
+    bool close = (d > 0.0f && d < ITEM_DETECT_THRESHOLD_CM);
+    bool far = (d < 0.0f || d > ITEM_CLEAR_THRESHOLD_CM);
+
+    if (!present) {
+        hits = close ? hits + 1 : 0;
+
+        if (hits >= 2) {
+            present = true;
+            hits = 0;
+            misses = 0;
+        }
+    } else {
+        misses = far ? misses + 1 : 0;
+
+        if (misses >= 3) {
+            present = false;
+            misses = 0;
+            hits = 0;
+        }
+    }
+
+    return present;
+}
+
+// Quick re-check right before capture.
+bool itemStillPresent() {
+    for (int i = 0; i < 2; i++) {
+        float d = readUltrasonicDistanceCM(
+            HC_CHUTE_TRIG_PIN,
+            HC_CHUTE_ECHO_PIN
+        );
+
+        if (d > 0.0f && d < ITEM_CLEAR_THRESHOLD_CM) {
+            return true;
+        }
+
+        delay(60);
+    }
+
+    return false;
+}
+
+// Majority vote over 5 reads of the water sensor DO pin.
+bool isItemWet() {
+    int wetReads = 0;
+
+    for (int i = 0; i < 5; i++) {
+        if (digitalRead(WATER_SENSOR_PIN) == WATER_WET_STATE) {
+            wetReads++;
+        }
+
+        delay(20);
+    }
+
+    return wetReads >= 3;
+}
+
+// ============================================================
+// RFID POINT CLAIM
+// ============================================================
+
+String lastCardUid = "";
+unsigned long lastCardTime = 0;
+
+bool claimPointsForCard(const String& uid) {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("Cannot claim: Wi-Fi disconnected.");
+        return false;
+    }
+
+    WiFiClientSecure client;
+    HTTPClient http;
+
+    String url = String(API_BASE) + CLAIM_PATH;
+
+    if (!beginSecureRequest(client, http, url)) {
+        Serial.println("Could not initialize claim request.");
+        return false;
+    }
+
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("Accept", "application/json");
+    http.addHeader("X-Device-Key", DEVICE_KEY);
+    http.addHeader("X-Controller-Code", CONTROLLER_CODE);
+
+    JsonDocument requestDoc;
+    requestDoc["card_uid"] = uid;
+
+    String requestBody;
+    serializeJson(requestDoc, requestBody);
+
+    int code = http.POST(requestBody);
+    String responseBody = http.getString();
+    http.end();
+
+    Serial.printf("RFID claim: HTTP %d\n", code);
+
+    if (code == 404) {
+        Serial.println("Card not recognised, inactive, or not linked to a student.");
+        return false;
+    }
+
+    if (!isHttpSuccess(code)) {
+        Serial.println(responseBody);
+        return false;
+    }
+
+    JsonDocument responseDoc;
+
+    if (deserializeJson(responseDoc, responseBody) != DeserializationError::Ok) {
+        Serial.println("Claim response was not valid JSON.");
+        return false;
+    }
+
+    // Valid card, but no waiting recycling session = nothing to claim.
+    JsonObject claim = responseDoc["recycling_claim"].as<JsonObject>();
+
+    if (claim.isNull() || !(claim["claimed"] | false)) {
+        Serial.println("Card OK, but there is no pending recycling session to claim.");
+        return false;
+    }
+
+    int awarded = claim["points_awarded"] | 0;
+    int balance = claim["new_points_balance"] | 0;
+
+    Serial.printf("Points claimed: %d (new balance: %d)\n", awarded, balance);
+
+    pendingSessionPoints = 0;
+    pendingSessionItems = 0;
+
+    return true;
+}
+
+void handleRFIDClaim() {
     if (!rfid.PICC_IsNewCardPresent()) {
         return;
     }
@@ -964,27 +1163,35 @@ void printRFIDDiagnostic() {
         return;
     }
 
-    Serial.print("Controller 1 RFID detected UID: ");
+    String uid = "";
 
     for (byte i = 0; i < rfid.uid.size; i++) {
-        if (rfid.uid.uidByte[i] < 0x10) {
-            Serial.print("0");
-        }
-
-        Serial.print(
-            rfid.uid.uidByte[i],
-            HEX
-        );
-
-        if (i + 1 < rfid.uid.size) {
-            Serial.print(":");
-        }
+        char hex[3];
+        snprintf(hex, sizeof(hex), "%02X", rfid.uid.uidByte[i]);
+        uid += hex;
     }
-
-    Serial.println();
 
     rfid.PICC_HaltA();
     rfid.PCD_StopCrypto1();
+
+    if (
+        uid == lastCardUid &&
+        millis() - lastCardTime < RFID_DEBOUNCE_MS
+    ) {
+        return;
+    }
+
+    lastCardUid = uid;
+    lastCardTime = millis();
+
+    Serial.print("RFID card tapped: ");
+    Serial.println(uid);
+
+    if (claimPointsForCard(uid)) {
+        beepClaim();
+    } else {
+        beepError();
+    }
 }
 
 // ============================================================
@@ -1133,8 +1340,10 @@ bool captureAndSendImage() {
 bool initializeCamera() {
     camera_config_t config = {};
 
-    config.ledc_channel = LEDC_CHANNEL_0;
-    config.ledc_timer = LEDC_TIMER_0;
+    // Keep the camera XCLK off LEDC channel 0 / timer 0 so it cannot clash
+    // with the servo PWM allocated by ESP32Servo.
+    config.ledc_channel = LEDC_CHANNEL_7;
+    config.ledc_timer = LEDC_TIMER_3;
 
     config.pin_d0 = Y2_GPIO_NUM;
     config.pin_d1 = Y3_GPIO_NUM;
@@ -1249,10 +1458,18 @@ void setup() {
         "Starting PLink Controller 1..."
     );
 
-    pinMode(
-        IR_SENSOR_PIN,
-        INPUT_PULLUP
-    );
+    // HC-SR04 #3 (chute)
+    pinMode(HC_CHUTE_TRIG_PIN, OUTPUT);
+    digitalWrite(HC_CHUTE_TRIG_PIN, LOW);
+    pinMode(HC_CHUTE_ECHO_PIN, INPUT);
+
+    // Water sensor DO (module drives the line)
+    pinMode(WATER_SENSOR_PIN, INPUT);
+
+    // Buzzer: set the idle level first to avoid a chirp at boot
+    digitalWrite(BUZZER_PIN, BUZZER_OFF_STATE);
+    pinMode(BUZZER_PIN, OUTPUT);
+    digitalWrite(BUZZER_PIN, BUZZER_OFF_STATE);
 
     // HC-SR04 pins
     pinMode(
@@ -1363,41 +1580,38 @@ void setup() {
 void loop() {
     maintainWiFi();
 
-    unsigned long nowMs =
-        millis();
+    unsigned long nowMs = millis();
 
     if (
         WiFi.status() == WL_CONNECTED &&
-        nowMs - lastConfigCheck >=
-            CONFIG_CHECK_INTERVAL_MS
+        nowMs - lastConfigCheck >= CONFIG_CHECK_INTERVAL_MS
     ) {
         lastConfigCheck = nowMs;
         checkRemoteConfiguration();
     }
 
+    // Step 1: bin fullness (HC #1 and #2) every 5 seconds.
     if (
         WiFi.status() == WL_CONNECTED &&
-        nowMs - lastBinSensorUpload >=
-            BIN_SENSOR_INTERVAL_MS &&
+        nowMs - lastBinSensorUpload >= BIN_SENSOR_INTERVAL_MS &&
         !classificationInProgress
     ) {
         lastBinSensorUpload = nowMs;
         updateBinSensors();
     }
 
-    // Diagnostic only. Controller 2 remains the production RFID
-    // controller for student identification and reward claiming.
-    printRFIDDiagnostic();
+    // Step 6: tap card to claim accumulated points.
+    handleRFIDClaim();
 
-    bool objectDetected =
-        digitalRead(IR_SENSOR_PIN) ==
-        IR_DETECTED_STATE;
+    // Step 2: HC #3 detects an item in the chute.
+    bool objectDetected = updateItemPresence();
 
     bool cooldownFinished =
-        nowMs - lastCaptureTime >=
-        CAPTURE_COOLDOWN_MS;
+        millis() - lastCaptureTime >= CAPTURE_COOLDOWN_MS;
 
-    // One image per object-presence transition.
+    // objectPreviouslyDetected now means "this item was already handled".
+    // It resets only when the chute is clear, so an item dropped during
+    // the cooldown is still processed once the cooldown ends.
     if (
         objectDetected &&
         !objectPreviouslyDetected &&
@@ -1405,40 +1619,42 @@ void loop() {
         !classificationInProgress
     ) {
         Serial.println();
-        Serial.println(
-            "IR sensor detected an object."
-        );
+        Serial.println("HC #3 detected an item.");
 
-        delay(
-            CAPTURE_DELAY_MS
-        );
+        delay(CAPTURE_DELAY_MS);
 
-        bool stillPresent =
-            digitalRead(IR_SENSOR_PIN) ==
-            IR_DETECTED_STATE;
+        if (itemStillPresent()) {
+            objectPreviouslyDetected = true;
 
-        if (stillPresent) {
-            bool success =
-                captureAndSendImage();
+            if (isItemWet()) {
+                // Wet item: reject with the buzzer, no photo.
+                Serial.println("Water sensor: item is WET -> rejected.");
+                beepReject();
+            } else {
+                Serial.println("Water sensor: item is dry. Capturing...");
 
-            Serial.println(
-                success
-                    ? "Classification completed."
-                    : "Classification failed."
-            );
+                bool success = captureAndSendImage();
 
-            lastCaptureTime =
-                millis();
+                Serial.println(
+                    success
+                        ? "Classification completed."
+                        : "Classification failed."
+                );
+
+                if (!success) {
+                    beepError();
+                }
+            }
+
+            lastCaptureTime = millis();
         } else {
-            Serial.println(
-                "Object disappeared before capture."
-            );
+            Serial.println("Item disappeared before capture.");
         }
     }
 
-    // Sensor must clear before another item can trigger.
-    objectPreviouslyDetected =
-        objectDetected;
+    if (!objectDetected) {
+        objectPreviouslyDetected = false;
+    }
 
     delay(50);
 }

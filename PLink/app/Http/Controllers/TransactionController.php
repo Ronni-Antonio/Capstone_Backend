@@ -211,21 +211,36 @@ class TransactionController extends Controller
             $itemsCount = $result['itemsCount'];
             $totalPoints = $result['totalPoints'];
 
+            $transaction = $result['transaction'];
+
             ActivityLog::record(
-                'PLASTIC_SCANNED',
-                "Student {$studentName} completed recycling {$itemsCount} plastic/bottle item(s) via smart bin.",
-                'Machine',
+                'RECYCLING_SESSION_CLAIMED',
+                "{$studentName} successfully completed recycling transaction {$transaction->transaction_code}: {$itemsCount} recyclable item(s), {$totalPoints} point(s) earned.",
+                'Collection',
                 null,
-                $student->student_id
+                $student->student_id,
+                [
+                    'transaction_id' => $transaction->transaction_id,
+                    'transaction_code' => $transaction->transaction_code,
+                    'smart_bin_id' => $transaction->smart_bin_id,
+                    'total_items' => $itemsCount,
+                    'total_points' => $totalPoints,
+                    'status' => 'completed',
+                ]
             );
 
             if ($totalPoints > 0) {
                 ActivityLog::record(
                     'POINTS_ADDED',
-                    "{$studentName} earned {$totalPoints} points from recycling.",
-                    'Points',
+                    "{$studentName} earned {$totalPoints} points from recycling transaction {$transaction->transaction_code}.",
+                    'Collection',
                     null,
-                    $student->student_id
+                    $student->student_id,
+                    [
+                        'transaction_id' => $transaction->transaction_id,
+                        'transaction_code' => $transaction->transaction_code,
+                        'points' => $totalPoints,
+                    ]
                 );
             }
         }

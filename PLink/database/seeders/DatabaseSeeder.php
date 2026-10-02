@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Models\ActivityLog;
 use App\Models\AiClassification;
 use App\Models\AiModel;
 use App\Models\AnalyticsReport;
@@ -429,7 +430,9 @@ class DatabaseSeeder extends Seeder
         /*
         |--------------------------------------------------------------------------
         | 10. RFID CARDS
-                foreach ($students as $index => $student) {
+        |--------------------------------------------------------------------------
+        */
+        foreach ($students as $index => $student) {
             RfidCard::updateOrCreate(
                 ['student_id' => $student->student_id],
                 [
@@ -439,8 +442,6 @@ class DatabaseSeeder extends Seeder
                 ]
             );
         }
-        |--------------------------------------------------------------------------
-        */
 
 
         /*
@@ -675,6 +676,134 @@ class DatabaseSeeder extends Seeder
                 });
             }
         }
+
+        /*
+        |--------------------------------------------------------------------------
+        | 13A. GUARANTEED SUCCESSFUL RECYCLING TRANSACTION + ACTIVITY LOG
+        |
+        | The random transactions above already create completed recycling records,
+        | but the Activity Logs frontend reads /api/logs (activity_logs), not the
+        | recycling_transactions table directly. This deterministic sample ensures
+        | there is always a successful recycling entry visible under Collection Logs.
+        |--------------------------------------------------------------------------
+        */
+        DB::transaction(function () use ($students, $smartBin, $cnnModel, $recyclableTypes) {
+            $student = $students->first();
+
+            if (!$student) {
+                return;
+            }
+
+            $rfidCard = RfidCard::where('student_id', $student->student_id)
+                ->where('status', 'active')
+                ->first();
+
+            $completedAt = now()->subMinutes(5);
+            $startedAt = $completedAt->copy()->subSeconds(30);
+            $transactionCode = '11111111-1111-4111-8111-111111111111';
+
+            $transaction = RecyclingTransaction::updateOrCreate(
+                ['transaction_code' => $transactionCode],
+                [
+                    'student_id' => $student->student_id,
+                    'rfid_card_id' => $rfidCard?->rfid_card_id,
+                    'smart_bin_id' => $smartBin->smart_bin_id,
+                    'status' => 'completed',
+                    'total_items' => 2,
+                    'total_points' => 3,
+                    'started_at' => $startedAt,
+                    'completed_at' => $completedAt,
+                ]
+            );
+
+            $sampleItems = [
+                [
+                    'item_number' => 1,
+                    'type' => $recyclableTypes['PET'],
+                    'confidence' => 98.25,
+                ],
+                [
+                    'item_number' => 2,
+                    'type' => $recyclableTypes['PAPER'],
+                    'confidence' => 96.40,
+                ],
+            ];
+
+            foreach ($sampleItems as $sample) {
+                $item = RecyclingItem::updateOrCreate(
+                    [
+                        'transaction_id' => $transaction->transaction_id,
+                        'item_number' => $sample['item_number'],
+                    ],
+                    [
+                        'image_path' => 'recycling-images/seeded-success-' . $sample['item_number'] . '.jpg',
+                        'weight_kg' => null,
+                        'status' => 'accepted',
+                    ]
+                );
+
+                AiClassification::updateOrCreate(
+                    ['recycling_item_id' => $item->recycling_item_id],
+                    [
+                        'recyclable_type_id' => $sample['type']->recyclable_type_id,
+                        'model_id' => $cnnModel->model_id,
+                        'confidence_score' => $sample['confidence'],
+                        'status' => 'valid',
+                        'notes' => 'Seeded successful recycling classification.',
+                        'is_verified' => false,
+                        'classified_at' => $startedAt->copy()->addSeconds($sample['item_number'] * 5),
+                    ]
+                );
+            }
+
+            $pointTransaction = PointTransaction::firstOrCreate(
+                [
+                    'student_id' => $student->student_id,
+                    'recycling_transaction_id' => $transaction->transaction_id,
+                    'transaction_type' => 'earned',
+                ],
+                [
+                    'redemption_id' => null,
+                    'points' => 3,
+                    'description' => 'Points earned from seeded successful recycling transaction ' . $transactionCode,
+                ]
+            );
+
+            if ($pointTransaction->wasRecentlyCreated) {
+                $student->increment('points_balance', 3);
+            }
+
+            $studentName = trim(($student->first_name ?? '') . ' ' . ($student->last_name ?? '')) ?: 'Student';
+            $description = "{$studentName} successfully completed recycling transaction {$transactionCode}: 2 recyclable item(s), 3 point(s) earned.";
+
+            $activityLog = ActivityLog::updateOrCreate(
+                [
+                    'student_id' => $student->student_id,
+                    'action' => 'RECYCLING_SESSION_CLAIMED',
+                    'description' => $description,
+                ],
+                [
+                    'user_id' => null,
+                    'module' => 'Collection',
+                    'metadata' => [
+                        'transaction_id' => $transaction->transaction_id,
+                        'transaction_code' => $transactionCode,
+                        'smart_bin_id' => $smartBin->smart_bin_id,
+                        'total_items' => 2,
+                        'total_points' => 3,
+                        'status' => 'completed',
+                    ],
+                    'ip_address' => null,
+                    'user_agent' => 'DatabaseSeeder',
+                ]
+            );
+
+            // Keep the seeded log close to the transaction completion time instead
+            // of the moment the seeder happened to run.
+            $activityLog->created_at = $completedAt;
+            $activityLog->updated_at = $completedAt;
+            $activityLog->saveQuietly();
+        });
 
         /*
         |--------------------------------------------------------------------------
