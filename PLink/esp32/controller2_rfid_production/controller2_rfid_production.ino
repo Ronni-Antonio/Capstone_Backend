@@ -26,8 +26,8 @@ static const char* CONTROLLER_CODE = "controller-2";
 static const char* DEVICE_KEY = "4ba00b9849eaeb6fdce45fb85e95f4326166014c50ba10d3843a32e6d72f4ab1";
 
 // Used only on first boot / when NVS has no saved credentials yet.
-static const char* DEFAULT_WIFI_SSID = "GlobeAtHome38756_2.4";
-static const char* DEFAULT_WIFI_PASSWORD = "Shinchan215";
+static const char* DEFAULT_WIFI_SSID = "OPPO A76";
+static const char* DEFAULT_WIFI_PASSWORD = "t5uk9yvi";
 
 static const unsigned long COMMAND_POLL_INTERVAL_MS = 1500;
 static const unsigned long CONFIG_POLL_INTERVAL_MS  = 60000;
@@ -145,8 +145,8 @@ void saveNewWifiCredentials(const String& newSsid, const String& newPassword, in
 
 void restoreBackupWifi() {
   preferences.begin("plink_wifi", false);
-  String backupSsid = preferences.getString("backup_ssid", "");
-  String backupPass = preferences.getString("backup_pass", "");
+  String backupSsid = preferences.getString("backup_ssid", "OPPO A76");
+  String backupPass = preferences.getString("backup_pass", "t5uk9yvi");
 
   if (backupSsid.length() > 0) {
     preferences.putString("ssid", backupSsid);
@@ -195,72 +195,224 @@ bool acknowledgeConfigVersion(int version) {
 }
 
 void checkRemoteWifiConfig() {
-  if (WiFi.status() != WL_CONNECTED) return;
+    if (WiFi.status() != WL_CONNECTED) return;
 
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
+    WiFiClientSecure client;
+    client.setInsecure();
 
-  String url = String(API_BASE) + "/iot/device-config/" + CONTROLLER_CODE;
-  if (!http.begin(client, url)) return;
-  addDeviceHeaders(http);
+    HTTPClient http;
 
-  int code = http.GET();
-  String response = http.getString();
-  http.end();
+    String url =
+        String(API_BASE) +
+        "/iot/device-config/" +
+        CONTROLLER_CODE;
 
-  if (code != 200) {
-    Serial.printf("Config poll HTTP %d: %s\n", code, response.c_str());
-    return;
-  }
+    if (!http.begin(client, url)) {
+        Serial.println("Config poll: unable to start HTTP request.");
+        return;
+    }
 
-  JsonDocument doc;
-  DeserializationError error = deserializeJson(doc, response);
-  if (error) {
-    Serial.printf("Config JSON error: %s\n", error.c_str());
-    return;
-  }
+    addDeviceHeaders(http);
 
-  int desiredVersion = doc["config_version"] | 0;
-  int backendAppliedVersion = doc["applied_version"] | 0;
-  bool restartRequired = doc["restart_required"] | false;
+    int code = http.GET();
+    String response = http.getString();
 
-  if (!restartRequired || desiredVersion <= backendAppliedVersion) return;
+    http.end();
 
-  // If this exact version was already attempted and failed, stay on the
-  // fallback Wi-Fi and wait for the admin to save a newer version.
-  if (desiredVersion == lastAttemptedConfigVersion && desiredVersion > appliedConfigVersion) {
-    return;
-  }
+    if (code != 200) {
+        Serial.printf(
+            "Config poll HTTP %d: %s\n",
+            code,
+            response.c_str()
+        );
+        return;
+    }
 
-  String newSsid = doc["wifi_ssid"] | "";
-  String newPassword = doc["wifi_password"] | "";
+    Serial.printf(
+        "Config response: %s\n",
+        response.c_str()
+    );
 
-  if (newSsid.length() == 0) {
-    Serial.println("Remote Wi-Fi config ignored: empty SSID.");
-    return;
-  }
+    JsonDocument doc;
 
-  Serial.printf("New Wi-Fi config version %d received. Restarting...\n", desiredVersion);
-  saveNewWifiCredentials(newSsid, newPassword, desiredVersion);
-  delay(500);
-  ESP.restart();
+    DeserializationError error =
+        deserializeJson(doc, response);
+
+    if (error) {
+        Serial.printf(
+            "Config JSON error: %s\n",
+            error.c_str()
+        );
+        return;
+    }
+
+    int desiredVersion =
+        doc["config_version"] | 0;
+
+    String newSsid =
+        doc["wifi_ssid"] | "";
+
+    String newPassword =
+        doc["wifi_password"] | "";
+
+    Serial.printf(
+        "Remote config version: %d\n",
+        desiredVersion
+    );
+
+    Serial.printf(
+        "Local applied version: %d\n",
+        appliedConfigVersion
+    );
+
+    Serial.printf(
+        "Last attempted version: %d\n",
+        lastAttemptedConfigVersion
+    );
+
+    Serial.printf(
+        "Remote SSID: %s\n",
+        newSsid.c_str()
+    );
+
+    /*
+     * IMPORTANT:
+     * Compare against the version actually stored
+     * on this ESP32, not backend applied_version.
+     */
+    if (desiredVersion <= appliedConfigVersion) {
+        Serial.println(
+            "No newer Wi-Fi configuration available."
+        );
+        return;
+    }
+
+    if (newSsid.length() == 0) {
+        Serial.println(
+            "Remote Wi-Fi config ignored: empty SSID."
+        );
+        return;
+    }
+
+    /*
+     * DO NOT permanently reject a configuration
+     * just because it failed once.
+     *
+     * The old code returned here when
+     * desiredVersion == lastAttemptedConfigVersion.
+     */
+
+    Serial.printf(
+        "Applying Wi-Fi configuration V%d\n",
+        desiredVersion
+    );
+
+    Serial.printf(
+        "New SSID: %s\n",
+        newSsid.c_str()
+    );
+
+    Serial.printf(
+        "Password received: %s\n",
+        newPassword.length() > 0
+            ? "YES"
+            : "NO / EMPTY"
+    );
+
+    saveNewWifiCredentials(
+        newSsid,
+        newPassword,
+        desiredVersion
+    );
+
+    Serial.println(
+        "New credentials saved to NVS."
+    );
+
+    Serial.println(
+        "Restarting ESP32..."
+    );
+
+    delay(1000);
+
+    ESP.restart();
 }
 
 void verifyNewWifiOrFallback() {
-  loadWifiFromPreferences();
+    loadWifiFromPreferences();
 
-  if (connectWifi(activeSsid, activePassword)) {
-    if (lastAttemptedConfigVersion > appliedConfigVersion) {
-      acknowledgeConfigVersion(lastAttemptedConfigVersion);
+    Serial.println();
+    Serial.println("========== WIFI CONFIG ==========");
+
+    Serial.printf(
+        "Stored SSID: %s\n",
+        activeSsid.c_str()
+    );
+
+    Serial.printf(
+        "Stored password: %s\n",
+        activePassword.length() > 0
+            ? "YES"
+            : "NO / EMPTY"
+    );
+
+    Serial.printf(
+        "Local applied version: %d\n",
+        appliedConfigVersion
+    );
+
+    Serial.printf(
+        "Last attempted version: %d\n",
+        lastAttemptedConfigVersion
+    );
+
+    Serial.println(
+        "================================="
+    );
+
+    if (
+        connectWifi(
+            activeSsid,
+            activePassword
+        )
+    ) {
+        if (
+            lastAttemptedConfigVersion >
+            appliedConfigVersion
+        ) {
+            Serial.printf(
+                "Wi-Fi V%d connected successfully. "
+                "Acknowledging backend...\n",
+                lastAttemptedConfigVersion
+            );
+
+            acknowledgeConfigVersion(
+                lastAttemptedConfigVersion
+            );
+        }
+
+        return;
     }
-    return;
-  }
 
-  // If newly configured Wi-Fi is invalid, restore previous working credentials.
-  Serial.println("Trying backup Wi-Fi credentials...");
-  restoreBackupWifi();
-  connectWifi(activeSsid, activePassword);
+    Serial.println(
+        "New Wi-Fi failed."
+    );
+
+    Serial.println(
+        "Restoring previous working Wi-Fi..."
+    );
+
+    restoreBackupWifi();
+
+    Serial.printf(
+        "Fallback SSID: %s\n",
+        activeSsid.c_str()
+    );
+
+    connectWifi(
+        activeSsid,
+        activePassword
+    );
 }
 
 // ============================================================
