@@ -12,6 +12,7 @@ use App\Http\Controllers\RewardController;
 use App\Http\Controllers\PlasticTypeController;
 use App\Http\Controllers\SettingController;
 use App\Http\Controllers\SectionController;
+use App\Http\Controllers\GradeLevelController;
 use App\Http\Controllers\MachineController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\MachineLogController;
@@ -59,6 +60,8 @@ Route::get('settings', [SettingController::class, 'index']);
 Route::post('settings', [SettingController::class, 'store']);
 Route::put('settings', [SettingController::class, 'update']);
 Route::patch('settings', [SettingController::class, 'update']);
+
+Route::get('grade-levels', [GradeLevelController::class, 'index']);
 
 Route::get('sections', [SectionController::class, 'index']);
 Route::get('sections/list', [SectionController::class, 'list']);

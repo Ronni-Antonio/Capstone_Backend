@@ -10,6 +10,11 @@ class GradeLevel extends Model
     protected $primaryKey = 'grade_level_id';
     protected $fillable = ['name'];
 
+    public function sections(): HasMany
+    {
+        return $this->hasMany(Section::class, 'grade_level_id', 'grade_level_id');
+    }
+
     public function students(): HasMany
     {
         return $this->hasMany(Students::class, 'grade_level_id', 'grade_level_id');

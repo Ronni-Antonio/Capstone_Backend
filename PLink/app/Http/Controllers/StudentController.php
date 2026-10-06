@@ -73,8 +73,18 @@ class StudentController extends Controller
             'student_number' => 'required|string|max:255|unique:students,student_number',
             'first_name' => 'required|string|max:255',
             'last_name' => 'required|string|max:255',
-            'grade_level_id' => 'required|exists:grade_levels,grade_level_id',
-            'section_id' => 'required|exists:sections,section_id',
+            'grade_level_id' => [
+                'required',
+                Rule::exists('grade_levels', 'grade_level_id')->where(
+                    fn ($query) => $query->whereIn('name', ['Grade 4', 'Grade 5', 'Grade 6'])
+                ),
+            ],
+            'section_id' => [
+                'required',
+                Rule::exists('sections', 'section_id')->where(
+                    fn ($query) => $query->where('grade_level_id', $request->input('grade_level_id'))
+                ),
+            ],
             'status' => 'nullable|in:active,inactive',
         ]);
 
@@ -125,6 +135,8 @@ class StudentController extends Controller
     {
         $student = Students::findOrFail($id);
 
+        $targetGradeId = (int) $request->input('grade_level_id', $student->grade_level_id);
+
         $validated = $request->validate([
             'student_number' => [
                 'sometimes',
@@ -140,10 +152,34 @@ class StudentController extends Controller
             ],
             'first_name' => 'sometimes|string|max:255',
             'last_name' => 'sometimes|string|max:255',
-            'grade_level_id' => 'sometimes|exists:grade_levels,grade_level_id',
-            'section_id' => 'sometimes|exists:sections,section_id',
+            'grade_level_id' => [
+                'sometimes',
+                Rule::exists('grade_levels', 'grade_level_id')->where(
+                    fn ($query) => $query->whereIn('name', ['Grade 4', 'Grade 5', 'Grade 6'])
+                ),
+            ],
+            'section_id' => [
+                'sometimes',
+                Rule::exists('sections', 'section_id')->where(
+                    fn ($query) => $query->where('grade_level_id', $targetGradeId)
+                ),
+            ],
             'status' => 'sometimes|in:active,inactive',
         ]);
+
+        $targetSectionId = (int) ($validated['section_id'] ?? $student->section_id);
+        $effectiveGradeId = (int) ($validated['grade_level_id'] ?? $student->grade_level_id);
+
+        $sectionMatchesGrade = Section::query()
+            ->where('section_id', $targetSectionId)
+            ->where('grade_level_id', $effectiveGradeId)
+            ->exists();
+
+        if (!$sectionMatchesGrade) {
+            return response()->json([
+                'message' => 'The selected section does not belong to the selected grade level.',
+            ], 422);
+        }
 
         $changes = [];
 
@@ -321,11 +357,31 @@ class StudentController extends Controller
                     continue;
                 }
 
-                $grade = GradeLevel::firstOrCreate([
-                    'name' => $data['grade_level']
-                ]);
+                $rawGrade = preg_replace('/^grade\s*/i', '', trim($data['grade_level']));
+                $gradeName = 'Grade ' . $rawGrade;
+
+                if (!in_array($gradeName, ['Grade 4', 'Grade 5', 'Grade 6'], true)) {
+                    $errors[] = [
+                        'row' => $rowNo,
+                        'data' => $data,
+                        'message' => 'Grade level must be Grade 4, Grade 5, or Grade 6.',
+                    ];
+                    continue;
+                }
+
+                $grade = GradeLevel::where('name', $gradeName)->first();
+
+                if (!$grade) {
+                    $errors[] = [
+                        'row' => $rowNo,
+                        'data' => $data,
+                        'message' => "{$gradeName} is not configured in grade_levels.",
+                    ];
+                    continue;
+                }
 
                 $section = Section::firstOrCreate([
+                    'grade_level_id' => $grade->grade_level_id,
                     'name' => $data['section']
                 ]);
 
@@ -516,13 +572,7 @@ class StudentController extends Controller
 
     public function activateStatus(string $id)
     {
-        $student = Students::with('rfidCards')
-            ->findOrFail($id);
-
-        $active = $student->rfidCards->contains(
-            fn ($card) =>
-                $card->status === 'active'
-        );
+        $student = Students::findOrFail($id);
 
         $command =
             \App\Models\IotControllerCommand::query()
@@ -541,13 +591,25 @@ class StudentController extends Controller
                 ->latest('command_id')
                 ->first();
 
+        if (!$command) {
+            return response()->json([
+                'status' => 'pending',
+                'command_status' => null,
+                'command_id' => null,
+            ]);
+        }
+
+        $status = match ($command->status) {
+            'completed' => 'success',
+            'failed', 'cancelled', 'expired' => 'error',
+            default => 'pending',
+        };
+
         return response()->json([
-            'status' =>
-                $active ? 'success' : 'pending',
-            'command_status' =>
-                $command?->status,
-            'command_id' =>
-                $command?->command_id,
+            'status' => $status,
+            'command_status' => $command->status,
+            'command_id' => $command->command_id,
+            'message' => $command->result_message,
         ]);
     }
 
