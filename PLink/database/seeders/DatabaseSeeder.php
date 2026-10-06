@@ -96,11 +96,16 @@ class DatabaseSeeder extends Seeder
         $sectionNames = ['Bonifacio', 'Rizal', 'Mabini'];
         $sections = [];
 
-        foreach ($sectionNames as $sectionName) {
-            $sections[$sectionName] = Section::updateOrCreate(
-                ['name' => $sectionName],
-                []
-            );
+        foreach ([4, 5, 6] as $gradeNumber) {
+            foreach ($sectionNames as $sectionName) {
+                $sections[$gradeNumber][$sectionName] = Section::updateOrCreate(
+                    [
+                        'grade_level_id' => $gradeLevels[$gradeNumber]->grade_level_id,
+                        'name' => $sectionName,
+                    ],
+                    []
+                );
+            }
         }
 
         /*
@@ -407,7 +412,7 @@ class DatabaseSeeder extends Seeder
         $students = collect();
 
         for ($i = 1; $i <= 30; $i++) {
-            $gradeNumber = (($i - 1) % 6) + 1;
+            $gradeNumber = (($i - 1) % 3) + 4;
             $sectionName = $sectionNames[($i - 1) % count($sectionNames)];
 
             $student = Students::updateOrCreate(
@@ -418,7 +423,7 @@ class DatabaseSeeder extends Seeder
                     'first_name' => $firstNames[$i - 1],
                     'last_name' => $lastNames[$i - 1],
                     'grade_level_id' => $gradeLevels[$gradeNumber]->grade_level_id,
-                    'section_id' => $sections[$sectionName]->section_id,
+                    'section_id' => $sections[$gradeNumber][$sectionName]->section_id,
                     'status' => 'active',
                     'points_balance' => 0,
                 ]
