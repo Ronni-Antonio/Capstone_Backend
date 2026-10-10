@@ -284,8 +284,23 @@ class IotClassificationController extends Controller
         $normalized = strtoupper(trim(preg_replace('/[_\-]+/', ' ', $rawLabel)));
         $normalized = preg_replace('/\s+/', ' ', $normalized);
 
-        // Aliases cover common CNN class-name styles.
+        // Map the exact CNN class names from ml_service/models/classnames.json
+        // to the authoritative recyclable_types names stored in Laravel/MySQL.
+        // Keep the shorter aliases too so older/test model outputs still work.
         $aliases = [
+            // Exact current CNN labels.
+            'PET CATEGORY' => 'PET Bottle',
+            'HDPE CATEGORY' => 'HDPE Bottle',
+            'PVC CATEGORY' => 'PVC Bottle',
+            'LDPE CATEGORY' => 'LDPE Bottle',
+            'PP CATEGORY' => 'PP Bottle',
+            'PS CATEGORY' => 'PS Bottle',
+            'PC CATEGORY' => 'PC Bottle',
+            'PLA CATEGORY' => 'PLA Plastic',
+            'WHITE PAPERS CATEGORY' => 'White Paper',
+            'CRUSHED OR DIRTY' => 'Dirty / Damaged Recyclable Material',
+
+            // Backward-compatible/common aliases.
             'PET' => 'PET Bottle',
             'PET BOTTLE' => 'PET Bottle',
             'HDPE' => 'HDPE Bottle',
@@ -304,6 +319,7 @@ class IotClassificationController extends Controller
             'PLA PLASTIC' => 'PLA Plastic',
             'PAPER' => 'White Paper',
             'WHITE PAPER' => 'White Paper',
+            'WHITE PAPERS' => 'White Paper',
             'DIRTY' => 'Dirty / Damaged Recyclable Material',
             'DAMAGED' => 'Dirty / Damaged Recyclable Material',
             'DEMOLISHED' => 'Dirty / Damaged Recyclable Material',
