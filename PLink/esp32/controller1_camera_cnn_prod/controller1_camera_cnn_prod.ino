@@ -39,10 +39,10 @@ const unsigned long RFID_DEBOUNCE_MS = 3000;
 // ============================================================
 
 static const char* FALLBACK_SSID =
-    "Roni :3";
+    "GlobeAtHome_38756_2.4";
 
 static const char* FALLBACK_PASSWORD =
-    "p00pyp4nt5";
+    "Shinchan215";
 
 // ============================================================
 // CONTROLLER 1 HARDWARE
@@ -66,8 +66,8 @@ const float ITEM_CLEAR_THRESHOLD_CM  = 20.0f;
 // Active buzzer, driven through an NPN transistor (active HIGH).
 // For a low-trigger buzzer module swap these two.
 #define BUZZER_PIN       48
-#define BUZZER_ON_STATE  HIGH
-#define BUZZER_OFF_STATE LOW
+#define BUZZER_ON_STATE  LOW
+#define BUZZER_OFF_STATE HIGH
 
 // Existing RC522 wiring from the current hardware diagram.
 #define RFID_SS_PIN   41
@@ -228,21 +228,22 @@ void saveWiFiCredentials(
 }
 
 void connectToWiFi() {
-    String ssid =
-        loadStoredString("ssid", FALLBACK_SSID);
-
-    String password =
-        loadStoredString("password", FALLBACK_PASSWORD);
+    // Always use the hardcoded fallback Wi-Fi.
+    const char* ssid = FALLBACK_SSID;
+    const char* password = FALLBACK_PASSWORD;
 
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);
 
-    WiFi.begin(
-        ssid.c_str(),
-        password.c_str()
-    );
+    WiFi.disconnect(true);
+    delay(500);
 
-    Serial.print("Connecting to Wi-Fi");
+    Serial.println();
+    Serial.println("Connecting using FALLBACK Wi-Fi...");
+    Serial.print("SSID: ");
+    Serial.println(ssid);
+
+    WiFi.begin(ssid, password);
 
     unsigned long started = millis();
 
@@ -257,7 +258,7 @@ void connectToWiFi() {
     Serial.println();
 
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("Wi-Fi connection timed out.");
+        Serial.println("Fallback Wi-Fi connection timed out.");
         return;
     }
 
