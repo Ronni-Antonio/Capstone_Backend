@@ -101,6 +101,12 @@ class IotClassificationController extends Controller
         $rawLabel = trim((string) ($prediction['class'] ?? $prediction['label'] ?? ''));
         $confidence = (float) ($prediction['confidence'] ?? 0);
 
+        // Keep all per-class CNN probabilities so Controller 1 can print
+        // every category confidence in the Arduino Serial Monitor.
+        $allPredictions = is_array($prediction['predictions'] ?? null)
+            ? $prediction['predictions']
+            : [];
+
         // Accept either 0..1 or 0..100 confidence from the Python service.
         if ($confidence <= 1.0) {
             $confidencePercent = $confidence * 100.0;
@@ -225,6 +231,10 @@ class IotClassificationController extends Controller
                 'accepted' => $classificationStatus === 'valid',
                 'points' => $earnedPoints,
                 'compartment' => $compartment,
+
+                // Debug information from the Python CNN API.
+                // The ESP32 uses this only for Serial Monitor output.
+                'predictions' => $allPredictions,
             ],
             'session' => [
                 'transaction_code' => $transaction->transaction_code,

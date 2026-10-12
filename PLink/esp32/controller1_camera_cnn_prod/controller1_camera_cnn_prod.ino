@@ -79,6 +79,7 @@ int paperCompartmentId = -1;
 // 360-DEGREE CONTINUOUS-ROTATION SERVO SETTINGS
 // ============================================================
 
+
 const int SERVO_STOP_COMMAND = 90;
 // Moderate rotation speeds. Move farther away from 90 for more speed.
 const int SERVO_CCW_COMMAND = 70;
@@ -97,8 +98,7 @@ const unsigned long ULTRASONIC_TIMEOUT_US = 30000;
 const unsigned long BIN_SENSOR_INTERVAL_MS = 5000;
 const float MAX_VALID_DISTANCE_CM = 400.0f;
 const int DISTANCE_SAMPLES = 5;
-// Fill readings are sent as RAW DISTANCE values.
-// Laravel remains responsible for converting distance -> percentage.
+
 unsigned long lastBinSensorUpload = 0;
 // Hardware objects
 MFRC522 rfid(RFID_SS_PIN, RFID_RST_PIN);
@@ -169,6 +169,10 @@ bool beginSecureRequest(
     HTTPClient& http,
     const String& url
 ) {
+    // Development/capstone testing:
+    // encrypted HTTPS is used, but the server certificate is not pinned.
+    // For the final hardened build, replace setInsecure() with the
+    // appropriate CA certificate.
     client.setInsecure();
     http.setConnectTimeout(10000);
     http.setTimeout(30000);
@@ -455,9 +459,44 @@ void handleClassificationResponse(
     Serial.println(rawLabel);
     Serial.print("Mapped material: ");
     Serial.println(mappedType);
-    Serial.print("Confidence: ");
+    Serial.print("Winner confidence: ");
     Serial.print(confidence * 100.0f, 2);
     Serial.println("%");
+
+    // Print every category score returned by the CNN API through Laravel.
+    Serial.println();
+    Serial.println("========== ALL CNN SCORES ==========");
+
+    JsonArray predictions =
+        doc["classification"]["predictions"].as<JsonArray>();
+
+    if (predictions.isNull() || predictions.size() == 0) {
+        Serial.println(
+            "No per-class confidence scores received."
+        );
+    } else {
+        for (JsonObject prediction : predictions) {
+            String className =
+                prediction["class"] | "Unknown";
+
+            float classConfidence =
+                prediction["confidence"] | 0.0f;
+
+            Serial.print(className);
+            Serial.print(": ");
+            Serial.print(
+                classConfidence * 100.0f,
+                2
+            );
+            Serial.println("%");
+        }
+    }
+
+    Serial.println(
+        "===================================="
+    );
+    Serial.println();
+
     Serial.print("Accepted: ");
     Serial.println(
         accepted ? "YES" : "NO"

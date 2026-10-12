@@ -8,32 +8,19 @@ import tensorflow as tf
 from flask import Flask, jsonify, request
 from PIL import Image, UnidentifiedImageError
 
-
-# ============================================================
-# PATH CONFIGURATION
-# ============================================================
-
 BASE_DIR = Path(__file__).resolve().parent
 
 MODEL_PATH = Path(
     os.getenv(
         "CNN_MODEL_PATH",
-        str(
-            BASE_DIR
-            / "models"
-            / "bottle_classification_model.keras"
-        ),
+        str(BASE_DIR / "models" / "bottle_classification_model.keras"),
     )
 )
 
 CLASS_NAMES_PATH = Path(
     os.getenv(
         "CNN_CLASS_NAMES_PATH",
-        str(
-            BASE_DIR
-            / "models"
-            / "classnames.json"
-        ),
+        str(BASE_DIR / "models" / "classnames.json"),
     )
 )
 
@@ -45,560 +32,270 @@ MAX_IMAGE_BYTES = int(
 )
 
 SAVE_DEBUG_IMAGE = (
-    os.getenv(
-        "CNN_SAVE_DEBUG_IMAGE",
-        "false"
-    ).lower()
+    os.getenv("CNN_SAVE_DEBUG_IMAGE", "false")
+    .strip()
+    .lower()
     in {"1", "true", "yes", "on"}
 )
 
-DEBUG_IMAGE_PATH = BASE_DIR / "last_esp32_capture.jpg"
-
-
-# ============================================================
-# FLASK
-# ============================================================
+DEBUG_IMAGE_PATH = Path(
+    os.getenv(
+        "CNN_DEBUG_IMAGE_PATH",
+        str(BASE_DIR / "last_esp32_capture.jpg"),
+    )
+)
 
 app = Flask(__name__)
 
-
-# ============================================================
-# CHECK MODEL FILES
-# ============================================================
-
 if not MODEL_PATH.exists():
     raise FileNotFoundError(
-        f"CNN model was not found at:\n"
-        f"{MODEL_PATH}"
+        f"CNN model was not found at {MODEL_PATH}. "
+        "Set CNN_MODEL_PATH or place the .keras model in ml_service/models/."
     )
 
 if not CLASS_NAMES_PATH.exists():
     raise FileNotFoundError(
-        f"CNN class-name file was not found at:\n"
-        f"{CLASS_NAMES_PATH}"
+        f"CNN class-name file was not found at {CLASS_NAMES_PATH}. "
+        "Create classnames.json in ml_service/models/ using the exact training class order."
     )
 
-
-# ============================================================
-# LOAD CLASS NAMES
-# ============================================================
-
-with CLASS_NAMES_PATH.open(
-    "r",
-    encoding="utf-8"
-) as file:
+with CLASS_NAMES_PATH.open("r", encoding="utf-8") as file:
     loaded_names = json.load(file)
 
-
-# Supports:
-#
-# [
-#   "Crushed or Dirty",
-#   "HDPE Category",
-#   ...
-# ]
-#
-# OR
-#
-# {
-#   "0": "Crushed or Dirty",
-#   "1": "HDPE Category"
-# }
-#
+# Accept either ["PET", "HDPE", ...] or {"0": "PET", "1": "HDPE", ...}.
 if isinstance(loaded_names, dict):
-
     class_names = [
-        str(
-            loaded_names[str(index)]
-        ).strip()
-        for index in range(
-            len(loaded_names)
-        )
+        str(loaded_names[str(index)]).strip()
+        for index in range(len(loaded_names))
     ]
-
-elif isinstance(
-    loaded_names,
-    list
-):
-
-    class_names = [
-        str(name).strip()
-        for name in loaded_names
-    ]
-
+elif isinstance(loaded_names, list):
+    class_names = [str(name).strip() for name in loaded_names]
 else:
-
     raise ValueError(
-        "classnames.json must contain "
-        "a JSON array or a zero-based "
-        "JSON object."
+        "classnames.json must contain a JSON array or zero-based JSON object."
     )
 
-
-if not class_names:
-    raise ValueError(
-        "classnames.json contains no classes."
-    )
-
-
-# ============================================================
-# LOAD CNN MODEL
-# ============================================================
-
-print("\n======================================")
-print("Loading PLink CNN model")
-print("======================================")
-
-print(
-    f"Model:\n{MODEL_PATH}"
-)
-
-print(
-    f"\nClasses:\n{CLASS_NAMES_PATH}"
-)
+if not class_names or any(not name for name in class_names):
+    raise ValueError("classnames.json contains missing or empty class names.")
 
 model = tf.keras.models.load_model(
     MODEL_PATH,
-    compile=False
+    compile=False,
 )
 
-
-# ============================================================
-# DETECT MODEL INPUT SIZE AUTOMATICALLY
-# ============================================================
-
+# Read the required image size directly from the saved model so the API
+# automatically works with the current model (for example 224x224 MobileNetV2).
 input_shape = model.input_shape
 
 if isinstance(input_shape, list):
+    raise ValueError("Expected one image input, but the model has multiple inputs.")
+
+if len(input_shape) != 4:
+    raise ValueError(f"Unexpected model input shape: {input_shape}")
+
+IMAGE_HEIGHT = int(input_shape[1])
+IMAGE_WIDTH = int(input_shape[2])
+IMAGE_CHANNELS = int(input_shape[3])
+
+if IMAGE_CHANNELS != 3:
     raise ValueError(
-        "CNN model has multiple inputs. "
-        "Expected one image input."
+        f"Expected a 3-channel RGB model, but the model expects {IMAGE_CHANNELS} channels."
     )
-
-
-# Expected:
-#
-# (None, 224, 224, 3)
-#
-IMAGE_HEIGHT = int(
-    input_shape[1]
-)
-
-IMAGE_WIDTH = int(
-    input_shape[2]
-)
-
-CHANNELS = int(
-    input_shape[3]
-)
-
-
-if CHANNELS != 3:
-    raise ValueError(
-        f"Expected RGB model with 3 channels, "
-        f"but model expects {CHANNELS}."
-    )
-
-
-# ============================================================
-# CHECK OUTPUT CLASS COUNT
-# ============================================================
 
 output_shape = model.output_shape
 
 if isinstance(output_shape, list):
-    raise ValueError(
-        "CNN model has multiple outputs. "
-        "Expected one classification output."
-    )
+    raise ValueError("Expected one classification output, but the model has multiple outputs.")
 
-model_class_count = int(
-    output_shape[-1]
-)
+MODEL_CLASS_COUNT = int(output_shape[-1])
 
-if model_class_count != len(
-    class_names
-):
+if MODEL_CLASS_COUNT != len(class_names):
     raise ValueError(
         "Model/class-name mismatch.\n"
-        f"Model outputs: {model_class_count}\n"
+        f"Model outputs: {MODEL_CLASS_COUNT}\n"
         f"classnames.json: {len(class_names)}"
     )
 
+print("=" * 60)
+print("PLink CNN API")
+print(f"Model: {MODEL_PATH}")
+print(f"Class names: {CLASS_NAMES_PATH}")
+print(f"Input size: {IMAGE_WIDTH}x{IMAGE_HEIGHT}")
+print(f"Classes: {MODEL_CLASS_COUNT}")
+print("Class order:")
+for index, name in enumerate(class_names):
+    print(f"  {index}: {name}")
+print("=" * 60)
 
-print(
-    f"\nInput size: "
-    f"{IMAGE_WIDTH}x{IMAGE_HEIGHT}"
-)
-
-print(
-    f"Number of classes: "
-    f"{len(class_names)}"
-)
-
-print("\nClass order:")
-
-for index, name in enumerate(
-    class_names
-):
-    print(
-        f"{index}: {name}"
-    )
-
-print("======================================\n")
-
-
-# ============================================================
-# HEALTH CHECK
-# ============================================================
 
 @app.get("/health")
 def health():
-
     return jsonify(
         {
             "success": True,
             "service": "PLink CNN API",
-
-            "model": (
-                MODEL_PATH.name
-            ),
-
-            "classes": (
-                class_names
-            ),
-
-            "class_count": (
-                len(class_names)
-            ),
-
-            "input_size": [
-                IMAGE_WIDTH,
-                IMAGE_HEIGHT,
-            ],
+            "model": MODEL_PATH.name,
+            "classes": class_names,
+            "class_count": len(class_names),
+            "input_size": [IMAGE_WIDTH, IMAGE_HEIGHT],
         }
     )
 
 
-# ============================================================
-# PREDICT
-# ============================================================
-
 @app.post("/predict")
 def predict():
-
-    # --------------------------------------------------------
-    # Validate request
-    # --------------------------------------------------------
-
     if not request.data:
-
         return jsonify(
             {
                 "success": False,
-                "message": (
-                    "JPEG body is empty."
-                ),
+                "message": "JPEG body is empty.",
             }
         ), 400
 
-
     if len(request.data) > MAX_IMAGE_BYTES:
-
         return jsonify(
             {
                 "success": False,
-                "message": (
-                    "JPEG exceeds maximum "
-                    "allowed image size."
-                ),
+                "message": "JPEG exceeds maximum allowed image size.",
+                "max_bytes": MAX_IMAGE_BYTES,
             }
         ), 413
 
-
     try:
-
-        # ----------------------------------------------------
-        # Decode JPEG
-        # ----------------------------------------------------
-
         image = Image.open(
-            io.BytesIO(
-                request.data
-            )
-        )
-
-        image = image.convert(
-            "RGB"
-        )
-
-
-        # ----------------------------------------------------
-        # Optional debugging
-        # ----------------------------------------------------
+            io.BytesIO(request.data)
+        ).convert("RGB")
 
         if SAVE_DEBUG_IMAGE:
-
+            DEBUG_IMAGE_PATH.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
             image.save(
                 DEBUG_IMAGE_PATH,
                 format="JPEG",
                 quality=95,
             )
-
-            print(
-                f"Saved ESP32 capture to: "
-                f"{DEBUG_IMAGE_PATH}"
-            )
-
-
-        # ----------------------------------------------------
-        # Resize exactly to model dimensions
-        # ----------------------------------------------------
+            print(f"Saved ESP32 capture: {DEBUG_IMAGE_PATH}")
 
         image = image.resize(
-            (
-                IMAGE_WIDTH,
-                IMAGE_HEIGHT
-            ),
+            (IMAGE_WIDTH, IMAGE_HEIGHT),
             Image.Resampling.BILINEAR,
         )
-
-
-        # ----------------------------------------------------
-        # Convert to NumPy
-        # ----------------------------------------------------
 
         image_array = np.asarray(
             image,
             dtype=np.float32,
         )
 
-
-        # ====================================================
-        # IMPORTANT
-        # ====================================================
+        # IMPORTANT:
+        # Do NOT divide by 255 here.
         #
-        # DO NOT:
-        #
-        #     image_array /= 255.0
-        #
-        # DO NOT:
-        #
-        #     preprocess_input(image_array)
-        #
-        # Your revised MobileNetV2 model already contains
-        # its preprocessing layer.
-        #
-        # The model therefore receives normal pixel values:
-        #
-        #     0 ... 255
-        #
-        # ====================================================
-
-
+        # Your saved PLink models contain their preprocessing/rescaling
+        # inside the model itself. Feeding 0..255 RGB values here prevents
+        # the image from being normalized twice.
         batch = np.expand_dims(
             image_array,
-            axis=0
+            axis=0,
         )
-
-
-        # ----------------------------------------------------
-        # Prediction
-        # ----------------------------------------------------
 
         predictions = model.predict(
             batch,
-            verbose=0
+            verbose=0,
         )[0]
-
 
         predictions = np.asarray(
             predictions,
             dtype=np.float32,
         )
 
+        if predictions.ndim != 1:
+            raise ValueError(
+                f"Unexpected prediction shape: {predictions.shape}"
+            )
 
-        # ----------------------------------------------------
-        # Winner
-        # ----------------------------------------------------
+        if len(predictions) != len(class_names):
+            raise ValueError(
+                "Prediction/class-name mismatch: "
+                f"{len(predictions)} model scores vs "
+                f"{len(class_names)} class names."
+            )
 
         class_index = int(
-            np.argmax(
-                predictions
-            )
+            np.argmax(predictions)
         )
-
 
         confidence = float(
-            predictions[
-                class_index
-            ]
+            predictions[class_index]
         )
 
+        predicted_class = class_names[
+            class_index
+        ]
 
-        if class_index >= len(
-            class_names
-        ):
-
-            return jsonify(
-                {
-                    "success": False,
-
-                    "message": (
-                        "CNN output index "
-                        f"{class_index} does not "
-                        "exist in classnames.json."
-                    ),
-                }
-            ), 500
-
-
-        predicted_class = (
-            class_names[
-                class_index
-            ]
-        )
-
-
-        # ----------------------------------------------------
-        # All probabilities
-        # ----------------------------------------------------
-
+        # Return every category score, sorted highest to lowest.
         sorted_indices = np.argsort(
             predictions
         )[::-1]
 
-
         all_predictions = []
 
         for index in sorted_indices:
-
             index = int(index)
-
             probability = float(
                 predictions[index]
             )
 
             all_predictions.append(
                 {
-                    "class": (
-                        class_names[
-                            index
-                        ]
-                    ),
-
-                    "class_index": (
-                        index
-                    ),
-
-                    "confidence": (
-                        probability
-                    ),
-
-                    "confidence_percent": (
-                        round(
-                            probability
-                            * 100,
-                            2
-                        )
+                    "class": class_names[index],
+                    "class_index": index,
+                    "confidence": probability,
+                    "confidence_percent": round(
+                        probability * 100.0,
+                        2,
                     ),
                 }
             )
 
+        print()
+        print("=" * 60)
+        print(f"Prediction: {predicted_class}")
+        print(f"Winner confidence: {confidence * 100.0:.2f}%")
+        print("All CNN scores:")
 
-        # ----------------------------------------------------
-        # Console debugging
-        # ----------------------------------------------------
-
-        print(
-            "\n======================================"
-        )
-
-        print(
-            f"Prediction: "
-            f"{predicted_class}"
-        )
-
-        print(
-            f"Confidence: "
-            f"{confidence * 100:.2f}%"
-        )
-
-        print(
-            "\nTop 5 predictions:"
-        )
-
-
-        for result in all_predictions[:5]:
-
+        for item in all_predictions:
             print(
-                f"{result['class']}: "
-                f"{result['confidence_percent']:.2f}%"
+                f"  {item['class']}: "
+                f"{item['confidence_percent']:.2f}%"
             )
 
-
-        print(
-            "======================================\n"
-        )
-
-
-        # ----------------------------------------------------
-        # Return JSON to Laravel
-        # ----------------------------------------------------
+        print("=" * 60)
 
         return jsonify(
             {
                 "success": True,
-
-                # Laravel reads this
-                "class": (
-                    predicted_class
+                "class": predicted_class,
+                "label": predicted_class,
+                "class_index": class_index,
+                "confidence": confidence,
+                "confidence_percent": round(
+                    confidence * 100.0,
+                    2,
                 ),
-
-                # Optional alias
-                "label": (
-                    predicted_class
-                ),
-
-                "class_index": (
-                    class_index
-                ),
-
-                # Laravel reads this
-                "confidence": (
-                    confidence
-                ),
-
-                "confidence_percent": (
-                    round(
-                        confidence * 100,
-                        2
-                    )
-                ),
-
-                # Useful for debugging
-                "predictions": (
-                    all_predictions
-                ),
+                "predictions": all_predictions,
             }
         )
 
-
     except UnidentifiedImageError:
-
         return jsonify(
             {
                 "success": False,
-                "message": (
-                    "Request body is not "
-                    "a valid image."
-                ),
+                "message": "Request body is not a valid image.",
             }
         ), 422
 
-
     except Exception as exc:
-
         app.logger.exception(
             "CNN prediction failed"
         )
@@ -611,32 +308,9 @@ def predict():
         ), 500
 
 
-# ============================================================
-# START SERVER
-# ============================================================
-
 if __name__ == "__main__":
-
-    print(
-        "Starting PLink CNN API..."
-    )
-
-    print(
-        "URL: http://127.0.0.1:5002"
-    )
-
-    print(
-        "Health: "
-        "http://127.0.0.1:5002/health"
-    )
-
-    print(
-        "Predict: "
-        "http://127.0.0.1:5002/predict"
-    )
-
     app.run(
         host="127.0.0.1",
         port=5002,
-        debug=False
+        debug=False,
     )
