@@ -557,14 +557,14 @@ void routeClassifiedItem(const String& compartment) {
     if (compartment == "plastic") {
         Serial.println("Routing item: PLASTIC -> LEFT");
         runSorterServo(
-            SERVO_CCW_COMMAND,
+            SERVO_CW_COMMAND,
             SERVO_PLASTIC_OUT_MS
         );
         Serial.println("Plastic gate open. Waiting for item to fall...");
         delay(SERVO_DROP_WAIT_MS);
         Serial.println("Returning sorter to NORMAL position...");
         runSorterServo(
-            SERVO_CW_COMMAND,
+            SERVO_CCW_COMMAND,
             SERVO_PLASTIC_RETURN_MS
         );
         Serial.println("Sorter returned approximately to NORMAL.");
@@ -580,14 +580,14 @@ void routeClassifiedItem(const String& compartment) {
     if (compartment == "paper") {
         Serial.println("Routing item: PAPER -> RIGHT");
         runSorterServo(
-            SERVO_CW_COMMAND,
+            SERVO_CCW_COMMAND,
             SERVO_PAPER_OUT_MS
         );
         Serial.println("Paper gate open. Waiting for item to fall...");
         delay(SERVO_DROP_WAIT_MS);
         Serial.println("Returning sorter to NORMAL position...");
         runSorterServo(
-            SERVO_CCW_COMMAND,
+            SERVO_CW_COMMAND,
             SERVO_PAPER_RETURN_MS
         );
         Serial.println("Sorter returned approximately to NORMAL.");
