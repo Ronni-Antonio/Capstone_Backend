@@ -191,8 +191,27 @@ class SectionController extends Controller
         return response()->json(['ranking_type' => 'overall', 'ranking' => $students]);
     }
 
-    public function sectionRankingOverall()
+    public function sectionRankingOverall(Request $request)
     {
+        $period = strtolower((string) $request->query('period', 'weekly'));
+        if (!in_array($period, ['weekly', 'monthly'], true)) {
+            $period = 'weekly';
+        }
+
+        $now = now();
+
+        if ($period === 'monthly') {
+            $periodStart = $now->copy()->startOfMonth();
+            $periodEnd = $now->copy()->endOfMonth();
+            $previousStart = $periodStart->copy()->subMonth()->startOfMonth();
+            $previousEnd = $periodStart->copy()->subMonth()->endOfMonth();
+        } else {
+            $periodStart = $now->copy()->startOfWeek();
+            $periodEnd = $now->copy()->endOfWeek();
+            $previousStart = $periodStart->copy()->subWeek()->startOfWeek();
+            $previousEnd = $periodStart->copy()->subWeek()->endOfWeek();
+        }
+
         $managedGradeIds = $this->managedGradeIds();
 
         $studentCounts = DB::table('students')
@@ -200,16 +219,28 @@ class SectionController extends Controller
             ->selectRaw('COUNT(*) as student_count')
             ->groupBy('section_id');
 
+        // Ranking points are period-specific earned points, not lifetime balances.
         $pointTotals = DB::table('point_transactions')
             ->join('students', 'students.student_id', '=', 'point_transactions.student_id')
             ->where('point_transactions.transaction_type', 'earned')
+            ->whereBetween('point_transactions.created_at', [$periodStart, $periodEnd])
             ->select('students.section_id')
             ->selectRaw('SUM(point_transactions.points) as total_points')
+            ->groupBy('students.section_id');
+
+        // Previous period is used only for the growth indicator displayed by the UI.
+        $previousPointTotals = DB::table('point_transactions')
+            ->join('students', 'students.student_id', '=', 'point_transactions.student_id')
+            ->where('point_transactions.transaction_type', 'earned')
+            ->whereBetween('point_transactions.created_at', [$previousStart, $previousEnd])
+            ->select('students.section_id')
+            ->selectRaw('SUM(point_transactions.points) as previous_points')
             ->groupBy('students.section_id');
 
         $itemTotals = DB::table('recycling_transactions')
             ->join('students', 'students.student_id', '=', 'recycling_transactions.student_id')
             ->where('recycling_transactions.status', 'completed')
+            ->whereBetween('recycling_transactions.completed_at', [$periodStart, $periodEnd])
             ->select('students.section_id')
             ->selectRaw('SUM(recycling_transactions.total_items) as total_recyclables')
             ->groupBy('students.section_id');
@@ -220,6 +251,8 @@ class SectionController extends Controller
                 $join->on('sections.section_id', '=', 'student_counts.section_id'))
             ->leftJoinSub($pointTotals, 'point_totals', fn ($join) =>
                 $join->on('sections.section_id', '=', 'point_totals.section_id'))
+            ->leftJoinSub($previousPointTotals, 'previous_point_totals', fn ($join) =>
+                $join->on('sections.section_id', '=', 'previous_point_totals.section_id'))
             ->leftJoinSub($itemTotals, 'item_totals', fn ($join) =>
                 $join->on('sections.section_id', '=', 'item_totals.section_id'))
             ->whereIn('sections.grade_level_id', $managedGradeIds)
@@ -231,31 +264,56 @@ class SectionController extends Controller
             )
             ->selectRaw('COALESCE(student_counts.student_count, 0) as student_count')
             ->selectRaw('COALESCE(point_totals.total_points, 0) as total_points')
+            ->selectRaw('COALESCE(previous_point_totals.previous_points, 0) as previous_points')
             ->selectRaw('COALESCE(item_totals.total_recyclables, 0) as total_recyclables')
             ->get();
 
-        $pointsRanks = $sections->sortByDesc('total_points')->values();
-        $recyclablesRanks = $sections->sortByDesc('total_recyclables')->values();
+        $pointsRanks = $sections
+            ->sortByDesc('total_points')
+            ->values();
+
+        $recyclablesRanks = $sections
+            ->sortByDesc('total_recyclables')
+            ->values();
+
         $recyclablesRankById = $recyclablesRanks->mapWithKeys(
             fn ($row, $index) => [$row->section_id => $index + 1]
         );
 
         $ranking = $pointsRanks->map(function ($row, $index) use ($recyclablesRankById) {
+            $currentPoints = (int) $row->total_points;
+            $previousPoints = (int) $row->previous_points;
+
+            if ($previousPoints > 0) {
+                $growthValue = (int) round((($currentPoints - $previousPoints) / $previousPoints) * 100);
+            } elseif ($currentPoints > 0) {
+                $growthValue = 100;
+            } else {
+                $growthValue = 0;
+            }
+
             return [
                 'section_id' => (int) $row->section_id,
                 'grade_level_id' => (int) $row->grade_level_id,
                 'grade_level' => $row->grade_level,
                 'section_name' => $row->section_name,
                 'student_count' => (int) $row->student_count,
-                'total_points' => (int) $row->total_points,
+                'total_points' => $currentPoints,
                 'total_recyclables' => (int) $row->total_recyclables,
-                'total_bottles' => (int) $row->total_recyclables, // compatibility alias
+                'total_bottles' => (int) $row->total_recyclables,
                 'points_rank' => $index + 1,
                 'recyclables_rank' => (int) $recyclablesRankById[$row->section_id],
-                'bottles_rank' => (int) $recyclablesRankById[$row->section_id], // compatibility alias
+                'bottles_rank' => (int) $recyclablesRankById[$row->section_id],
+                'growth' => ($growthValue >= 0 ? '+' : '') . $growthValue . '%',
             ];
         });
 
-        return response()->json(['ranking_type' => 'sections', 'ranking' => $ranking]);
+        return response()->json([
+            'ranking_type' => 'sections',
+            'period' => $period,
+            'period_start' => $periodStart->toDateTimeString(),
+            'period_end' => $periodEnd->toDateTimeString(),
+            'ranking' => $ranking,
+        ]);
     }
 }
