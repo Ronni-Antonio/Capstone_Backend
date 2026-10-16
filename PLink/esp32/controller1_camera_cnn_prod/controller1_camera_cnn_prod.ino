@@ -60,11 +60,11 @@ const unsigned long RFID_DEBOUNCE_MS = 1000;
 
 static const char* FALLBACK_SSID =
 
-    "Jhanna";
+    "roni";
 
 static const char* FALLBACK_PASSWORD =
 
-    "milkie_2025";
+    "xmlxsldtd";
 
 // ============================================================
 
@@ -289,6 +289,8 @@ void beepComplete();
 
 void beepReject();
 
+void beepWiFiConnected();
+
 void beepClaim();
 
 void beepError();
@@ -437,6 +439,10 @@ void connectToWiFi() {
     }
 
     Serial.println("Wi-Fi connected.");
+
+    // One short confirmation beep whenever this controller
+    // successfully connects/reconnects to Wi-Fi.
+    beepWiFiConnected();
 
     Serial.print("SSID: ");
 
@@ -1568,9 +1574,13 @@ void beepComplete() { buzzerPulse(400, 0, 1); }
 
 void beepReject() { buzzerPulse(120, 100, 3); }
 
-// Two medium beeps: points claimed.
+// One short beep: Wi-Fi connected successfully.
 
-void beepClaim() { buzzerPulse(200, 150, 2); }
+void beepWiFiConnected() { buzzerPulse(150, 0, 1); }
+
+// One medium beep: points claimed successfully.
+
+void beepClaim() { buzzerPulse(200, 0, 1); }
 
 // One very long beep: error (network / backend / card not accepted).
 
