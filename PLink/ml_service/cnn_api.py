@@ -9,18 +9,33 @@ from flask import Flask, jsonify, request
 from PIL import Image, UnidentifiedImageError
 
 BASE_DIR = Path(__file__).resolve().parent
+MODELS_DIR = BASE_DIR / "models"
 
-MODEL_PATH = Path(
+ROUTE_MODEL_PATH = Path(
     os.getenv(
-        "CNN_MODEL_PATH",
-        str(BASE_DIR / "models" / "bottle_classification_model.keras"),
+        "CNN_ROUTE_MODEL_PATH",
+        str(MODELS_DIR / "route_classifier.keras"),
     )
 )
 
-CLASS_NAMES_PATH = Path(
+ROUTE_CLASS_NAMES_PATH = Path(
     os.getenv(
-        "CNN_CLASS_NAMES_PATH",
-        str(BASE_DIR / "models" / "classnames.json"),
+        "CNN_ROUTE_CLASS_NAMES_PATH",
+        str(MODELS_DIR / "route_classnames.json"),
+    )
+)
+
+PLASTIC_MODEL_PATH = Path(
+    os.getenv(
+        "CNN_PLASTIC_MODEL_PATH",
+        str(MODELS_DIR / "plastic_type_classifier.keras"),
+    )
+)
+
+PLASTIC_CLASS_NAMES_PATH = Path(
+    os.getenv(
+        "CNN_PLASTIC_CLASS_NAMES_PATH",
+        str(MODELS_DIR / "plastic_classnames.json"),
     )
 )
 
@@ -47,85 +62,215 @@ DEBUG_IMAGE_PATH = Path(
 
 app = Flask(__name__)
 
-if not MODEL_PATH.exists():
-    raise FileNotFoundError(
-        f"CNN model was not found at {MODEL_PATH}. "
-        "Set CNN_MODEL_PATH or place the .keras model in ml_service/models/."
+
+def load_class_names(path: Path, display_name: str) -> list[str]:
+    if not path.exists():
+        raise FileNotFoundError(
+            f"{display_name} class-name file was not found at {path}."
+        )
+
+    with path.open("r", encoding="utf-8") as file:
+        loaded = json.load(file)
+
+    if isinstance(loaded, dict):
+        names = [
+            str(loaded[str(index)]).strip()
+            for index in range(len(loaded))
+        ]
+    elif isinstance(loaded, list):
+        names = [str(name).strip() for name in loaded]
+    else:
+        raise ValueError(
+            f"{path.name} must contain a JSON array or zero-based JSON object."
+        )
+
+    if not names or any(not name for name in names):
+        raise ValueError(f"{path.name} contains missing or empty class names.")
+
+    return names
+
+
+def load_model_and_validate(
+    model_path: Path,
+    class_names: list[str],
+    display_name: str,
+):
+    if not model_path.exists():
+        raise FileNotFoundError(
+            f"{display_name} model was not found at {model_path}."
+        )
+
+    model = tf.keras.models.load_model(
+        model_path,
+        compile=False,
     )
 
-if not CLASS_NAMES_PATH.exists():
-    raise FileNotFoundError(
-        f"CNN class-name file was not found at {CLASS_NAMES_PATH}. "
-        "Create classnames.json in ml_service/models/ using the exact training class order."
-    )
+    input_shape = model.input_shape
+    if isinstance(input_shape, list):
+        raise ValueError(
+            f"{display_name} must have exactly one image input."
+        )
 
-with CLASS_NAMES_PATH.open("r", encoding="utf-8") as file:
-    loaded_names = json.load(file)
+    if len(input_shape) != 4:
+        raise ValueError(
+            f"Unexpected {display_name} input shape: {input_shape}"
+        )
 
-# Accept either ["PET", "HDPE", ...] or {"0": "PET", "1": "HDPE", ...}.
-if isinstance(loaded_names, dict):
-    class_names = [
-        str(loaded_names[str(index)]).strip()
-        for index in range(len(loaded_names))
-    ]
-elif isinstance(loaded_names, list):
-    class_names = [str(name).strip() for name in loaded_names]
-else:
-    raise ValueError(
-        "classnames.json must contain a JSON array or zero-based JSON object."
-    )
+    channels = int(input_shape[3])
+    if channels != 3:
+        raise ValueError(
+            f"{display_name} expects {channels} channels; RGB (3) is required."
+        )
 
-if not class_names or any(not name for name in class_names):
-    raise ValueError("classnames.json contains missing or empty class names.")
+    output_shape = model.output_shape
+    if isinstance(output_shape, list):
+        raise ValueError(
+            f"{display_name} must have exactly one classification output."
+        )
 
-model = tf.keras.models.load_model(
-    MODEL_PATH,
-    compile=False,
+    output_count = int(output_shape[-1])
+    if output_count != len(class_names):
+        raise ValueError(
+            f"{display_name} model/class-name mismatch: "
+            f"model outputs {output_count}, but {len(class_names)} labels were loaded."
+        )
+
+    return model, input_shape
+
+
+def normalize_route_name(value: str) -> str:
+    return str(value).strip().lower()
+
+
+route_class_names = load_class_names(
+    ROUTE_CLASS_NAMES_PATH,
+    "Stage 1 route",
+)
+plastic_class_names = load_class_names(
+    PLASTIC_CLASS_NAMES_PATH,
+    "Stage 2 plastic",
 )
 
-# Read the required image size directly from the saved model so the API
-# automatically works with the current model (for example 224x224 MobileNetV2).
-input_shape = model.input_shape
+route_model, route_input_shape = load_model_and_validate(
+    ROUTE_MODEL_PATH,
+    route_class_names,
+    "Stage 1 route",
+)
+plastic_model, plastic_input_shape = load_model_and_validate(
+    PLASTIC_MODEL_PATH,
+    plastic_class_names,
+    "Stage 2 plastic",
+)
 
-if isinstance(input_shape, list):
-    raise ValueError("Expected one image input, but the model has multiple inputs.")
+ROUTE_IMAGE_HEIGHT = int(route_input_shape[1])
+ROUTE_IMAGE_WIDTH = int(route_input_shape[2])
+PLASTIC_IMAGE_HEIGHT = int(plastic_input_shape[1])
+PLASTIC_IMAGE_WIDTH = int(plastic_input_shape[2])
 
-if len(input_shape) != 4:
-    raise ValueError(f"Unexpected model input shape: {input_shape}")
-
-IMAGE_HEIGHT = int(input_shape[1])
-IMAGE_WIDTH = int(input_shape[2])
-IMAGE_CHANNELS = int(input_shape[3])
-
-if IMAGE_CHANNELS != 3:
+if (
+    ROUTE_IMAGE_HEIGHT != PLASTIC_IMAGE_HEIGHT
+    or ROUTE_IMAGE_WIDTH != PLASTIC_IMAGE_WIDTH
+):
     raise ValueError(
-        f"Expected a 3-channel RGB model, but the model expects {IMAGE_CHANNELS} channels."
+        "The Stage 1 and Stage 2 models must use the same input size. "
+        f"Stage 1: {ROUTE_IMAGE_WIDTH}x{ROUTE_IMAGE_HEIGHT}; "
+        f"Stage 2: {PLASTIC_IMAGE_WIDTH}x{PLASTIC_IMAGE_HEIGHT}."
     )
 
-output_shape = model.output_shape
+IMAGE_HEIGHT = ROUTE_IMAGE_HEIGHT
+IMAGE_WIDTH = ROUTE_IMAGE_WIDTH
 
-if isinstance(output_shape, list):
-    raise ValueError("Expected one classification output, but the model has multiple outputs.")
+normalized_route_classes = [
+    normalize_route_name(name)
+    for name in route_class_names
+]
 
-MODEL_CLASS_COUNT = int(output_shape[-1])
-
-if MODEL_CLASS_COUNT != len(class_names):
+if "paper" not in normalized_route_classes or "plastic" not in normalized_route_classes:
     raise ValueError(
-        "Model/class-name mismatch.\n"
-        f"Model outputs: {MODEL_CLASS_COUNT}\n"
-        f"classnames.json: {len(class_names)}"
+        "route_classnames.json must contain both 'paper' and 'plastic'."
     )
 
-print("=" * 60)
-print("PLink CNN API")
-print(f"Model: {MODEL_PATH}")
-print(f"Class names: {CLASS_NAMES_PATH}")
+print("=" * 68)
+print("PLink TWO-STAGE CNN API")
+print(f"Stage 1 model: {ROUTE_MODEL_PATH}")
+print(f"Stage 1 labels: {ROUTE_CLASS_NAMES_PATH}")
+print(f"Stage 2 model: {PLASTIC_MODEL_PATH}")
+print(f"Stage 2 labels: {PLASTIC_CLASS_NAMES_PATH}")
 print(f"Input size: {IMAGE_WIDTH}x{IMAGE_HEIGHT}")
-print(f"Classes: {MODEL_CLASS_COUNT}")
-print("Class order:")
-for index, name in enumerate(class_names):
+print("Stage 1 route classes:")
+for index, name in enumerate(route_class_names):
     print(f"  {index}: {name}")
-print("=" * 60)
+print("Stage 2 plastic classes:")
+for index, name in enumerate(plastic_class_names):
+    print(f"  {index}: {name}")
+print("=" * 68)
+
+
+def sorted_prediction_rows(
+    probabilities: np.ndarray,
+    class_names: list[str],
+) -> list[dict]:
+    sorted_indices = np.argsort(probabilities)[::-1]
+    rows = []
+
+    for raw_index in sorted_indices:
+        index = int(raw_index)
+        probability = float(probabilities[index])
+
+        rows.append(
+            {
+                "class": class_names[index],
+                "class_index": index,
+                "confidence": probability,
+                "confidence_percent": round(
+                    probability * 100.0,
+                    2,
+                ),
+            }
+        )
+
+    return rows
+
+
+def predict_model(
+    model,
+    batch: np.ndarray,
+    class_names: list[str],
+):
+    probabilities = model.predict(
+        batch,
+        verbose=0,
+    )[0]
+
+    probabilities = np.asarray(
+        probabilities,
+        dtype=np.float32,
+    )
+
+    if probabilities.ndim != 1:
+        raise ValueError(
+            f"Unexpected prediction shape: {probabilities.shape}"
+        )
+
+    if len(probabilities) != len(class_names):
+        raise ValueError(
+            "Prediction/class-name mismatch: "
+            f"{len(probabilities)} scores vs {len(class_names)} labels."
+        )
+
+    class_index = int(np.argmax(probabilities))
+    confidence = float(probabilities[class_index])
+    class_name = class_names[class_index]
+
+    return (
+        class_name,
+        class_index,
+        confidence,
+        sorted_prediction_rows(
+            probabilities,
+            class_names,
+        ),
+    )
 
 
 @app.get("/health")
@@ -133,11 +278,22 @@ def health():
     return jsonify(
         {
             "success": True,
-            "service": "PLink CNN API",
-            "model": MODEL_PATH.name,
-            "classes": class_names,
-            "class_count": len(class_names),
+            "service": "PLink Two-Stage CNN API",
             "input_size": [IMAGE_WIDTH, IMAGE_HEIGHT],
+            "stage_1": {
+                "name": "route_classifier",
+                "model": ROUTE_MODEL_PATH.name,
+                "class_names_file": ROUTE_CLASS_NAMES_PATH.name,
+                "classes": route_class_names,
+                "class_count": len(route_class_names),
+            },
+            "stage_2": {
+                "name": "plastic_type_classifier",
+                "model": PLASTIC_MODEL_PATH.name,
+                "class_names_file": PLASTIC_CLASS_NAMES_PATH.name,
+                "classes": plastic_class_names,
+                "class_count": len(plastic_class_names),
+            },
         }
     )
 
@@ -188,93 +344,107 @@ def predict():
             dtype=np.float32,
         )
 
-        # IMPORTANT:
-        # Do NOT divide by 255 here.
-        #
-        # Your saved PLink models contain their preprocessing/rescaling
-        # inside the model itself. Feeding 0..255 RGB values here prevents
-        # the image from being normalized twice.
+        # Both saved models own their MobileNetV2 rescaling. Keep inference
+        # values in RGB 0..255 and do NOT call preprocess_input here.
         batch = np.expand_dims(
             image_array,
             axis=0,
         )
 
-        predictions = model.predict(
+        (
+            route_class,
+            route_class_index,
+            route_confidence,
+            route_predictions,
+        ) = predict_model(
+            route_model,
             batch,
-            verbose=0,
-        )[0]
-
-        predictions = np.asarray(
-            predictions,
-            dtype=np.float32,
+            route_class_names,
         )
 
-        if predictions.ndim != 1:
+        route = normalize_route_name(
+            route_class
+        )
+
+        if route not in {"paper", "plastic"}:
             raise ValueError(
-                f"Unexpected prediction shape: {predictions.shape}"
+                f"Unexpected Stage 1 route class: {route_class!r}. "
+                "Expected paper or plastic."
             )
 
-        if len(predictions) != len(class_names):
-            raise ValueError(
-                "Prediction/class-name mismatch: "
-                f"{len(predictions)} model scores vs "
-                f"{len(class_names)} class names."
+        # Paper needs no second classifier. Preserve the legacy `class` and
+        # `label` fields expected by Laravel by returning the existing paper
+        # source label.
+        if route == "paper":
+            predicted_class = "White Papers Category"
+            class_index = None
+            confidence = route_confidence
+            subtype_predictions = []
+            plastic_type = None
+            plastic_type_confidence = None
+
+        else:
+            (
+                predicted_class,
+                class_index,
+                confidence,
+                subtype_predictions,
+            ) = predict_model(
+                plastic_model,
+                batch,
+                plastic_class_names,
             )
 
-        class_index = int(
-            np.argmax(predictions)
-        )
-
-        confidence = float(
-            predictions[class_index]
-        )
-
-        predicted_class = class_names[
-            class_index
-        ]
-
-        # Return every category score, sorted highest to lowest.
-        sorted_indices = np.argsort(
-            predictions
-        )[::-1]
-
-        all_predictions = []
-
-        for index in sorted_indices:
-            index = int(index)
-            probability = float(
-                predictions[index]
-            )
-
-            all_predictions.append(
-                {
-                    "class": class_names[index],
-                    "class_index": index,
-                    "confidence": probability,
-                    "confidence_percent": round(
-                        probability * 100.0,
-                        2,
-                    ),
-                }
-            )
+            plastic_type = predicted_class
+            plastic_type_confidence = confidence
 
         print()
-        print("=" * 60)
-        print(f"Prediction: {predicted_class}")
-        print(f"Winner confidence: {confidence * 100.0:.2f}%")
-        print("All CNN scores:")
-
-        for item in all_predictions:
+        print("=" * 68)
+        print("TWO-STAGE CLASSIFICATION")
+        print(
+            f"Stage 1 route: {route} "
+            f"({route_confidence * 100.0:.2f}%)"
+        )
+        print("Stage 1 scores:")
+        for item in route_predictions:
             print(
                 f"  {item['class']}: "
                 f"{item['confidence_percent']:.2f}%"
             )
 
-        print("=" * 60)
+        if route == "plastic":
+            print(
+                f"Stage 2 plastic type: {predicted_class} "
+                f"({confidence * 100.0:.2f}%)"
+            )
+            print("Stage 2 scores:")
+            for item in subtype_predictions:
+                print(
+                    f"  {item['class']}: "
+                    f"{item['confidence_percent']:.2f}%"
+                )
+        else:
+            print("Stage 2 skipped because Stage 1 predicted paper.")
 
+        print("=" * 68)
+
+        # Compatibility contract:
+        # - `class`, `label`, `confidence`, `predictions` remain available to
+        #   the existing Laravel/ESP32 pipeline.
+        # - new route/plastic_type fields expose the two-stage result.
         return jsonify(
             {
                 "success": True,
+                "pipeline": "two_stage",
+                "route": route,
+                "route_raw_prediction": route,
+                "route_class_index": route_class_index,
+                "route_confidence": route_confidence,
+                "route_confidence_percent": round(
+                    route_confidence * 100.0,
+                    2,
+                ),
+                "route_predictions": route_predictions,
                 "class": predicted_class,
                 "label": predicted_class,
                 "class_index": class_index,
@@ -283,7 +453,14 @@ def predict():
                     confidence * 100.0,
                     2,
                 ),
-                "predictions": all_predictions,
+                "plastic_type": plastic_type,
+                "plastic_type_confidence": plastic_type_confidence,
+                "plastic_type_confidence_percent": (
+                    round(plastic_type_confidence * 100.0, 2)
+                    if plastic_type_confidence is not None
+                    else None
+                ),
+                "predictions": subtype_predictions,
             }
         )
 
@@ -297,7 +474,7 @@ def predict():
 
     except Exception as exc:
         app.logger.exception(
-            "CNN prediction failed"
+            "Two-stage CNN prediction failed"
         )
 
         return jsonify(

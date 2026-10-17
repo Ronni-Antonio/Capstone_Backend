@@ -306,13 +306,15 @@ class DatabaseSeeder extends Seeder
         */
         $cnnModel = AiModel::updateOrCreate(
             [
-                'name' => 'Plastic Classification CNN',
-                'version' => '1.0.0',
+                'name' => 'PLink Two-Stage Recyclable CNN',
+                'version' => '2.0.0',
             ],
             [
                 'framework' => 'TensorFlow/Keras',
-                'accuracy' => 95.000,
-                'model_path' => 'models/plastic_cnn/v1.0.0',
+                // Accuracy is stage/dataset dependent; leave null instead of
+                // hard-coding the old single-model 95% value.
+                'accuracy' => null,
+                'model_path' => 'ml_service/models/two_stage',
                 'is_active' => true,
             ]
         );

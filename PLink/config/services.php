@@ -51,11 +51,17 @@ return [
 
     'cnn' => [
         'url' => env('CNN_API_URL', 'http://127.0.0.1:5002'),
-        'min_confidence' => env('CNN_MIN_CONFIDENCE', 0.70),
+
+        // Two-stage thresholds:
+        // Stage 1 decides the physical compartment (paper/plastic).
+        // Stage 2 identifies the plastic subtype after Stage 1 says plastic.
+        'route_min_confidence' => env('CNN_ROUTE_MIN_CONFIDENCE', 0.70),
+        'plastic_type_min_confidence' => env('CNN_PLASTIC_TYPE_MIN_CONFIDENCE', 0.55),
+
         'timeout_seconds' => env('CNN_TIMEOUT_SECONDS', 30),
         'max_image_bytes' => env('CNN_MAX_IMAGE_BYTES', 5242880),
-        'model_name' => env('CNN_MODEL_NAME', 'Recyclable Classification CNN'),
-        'model_version' => env('CNN_MODEL_VERSION', '1.0.0'),
+        'model_name' => env('CNN_MODEL_NAME', 'PLink Two-Stage Recyclable CNN'),
+        'model_version' => env('CNN_MODEL_VERSION', '2.0.0'),
     ],
 
 ];

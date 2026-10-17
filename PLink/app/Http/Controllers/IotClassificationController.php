@@ -26,10 +26,11 @@ class IotClassificationController extends Controller
      * Laravel:
      *   1. authenticates Controller 1
      *   2. finds/creates the current unclaimed recycling transaction
-     *   3. forwards the JPEG to the private CNN service
-     *   4. maps the CNN label to recyclable_types
-     *   5. records RecyclingItem + AiClassification
-     *   6. returns the running points total and target compartment
+     *   3. forwards the JPEG to the private two-stage CNN service
+     *   4. uses Stage 1 (paper/plastic) for physical routing
+     *   5. uses Stage 2 only for plastic subtype identification
+     *   6. maps the final label to recyclable_types and records the item
+     *   7. returns the running points total and target compartment
      */
     public function classify(Request $request)
     {
@@ -98,45 +99,94 @@ class IotClassificationController extends Controller
         }
 
         $prediction = $cnnResponse->json();
-        $rawLabel = trim((string) ($prediction['class'] ?? $prediction['label'] ?? ''));
-        $confidence = (float) ($prediction['confidence'] ?? 0);
 
-        // Keep all per-class CNN probabilities so Controller 1 can print
-        // every category confidence in the Arduino Serial Monitor.
+        // Two-stage CNN contract:
+        // - Stage 1 decides the physical route: paper or plastic.
+        // - Stage 2 runs only for plastic and identifies the plastic subtype.
+        // - Low Stage 1 confidence becomes a fail-safe reject.
+        $route = strtolower(trim((string) ($prediction['route'] ?? '')));
+        $rawLabel = trim((string) ($prediction['class'] ?? $prediction['label'] ?? ''));
+
+        $routeConfidence = (float) ($prediction['route_confidence'] ?? 0);
+        $classificationConfidence = (float) ($prediction['confidence'] ?? 0);
+
+        $routeConfidencePercent = $routeConfidence <= 1.0
+            ? $routeConfidence * 100.0
+            : $routeConfidence;
+
+        $confidencePercent = $classificationConfidence <= 1.0
+            ? $classificationConfidence * 100.0
+            : $classificationConfidence;
+
+        $minimumRouteConfidence = (float) config('services.cnn.route_min_confidence', 0.70);
+        $minimumRouteConfidencePercent = $minimumRouteConfidence <= 1.0
+            ? $minimumRouteConfidence * 100.0
+            : $minimumRouteConfidence;
+
+        $minimumPlasticTypeConfidence = (float) config('services.cnn.plastic_type_min_confidence', 0.55);
+        $minimumPlasticTypeConfidencePercent = $minimumPlasticTypeConfidence <= 1.0
+            ? $minimumPlasticTypeConfidence * 100.0
+            : $minimumPlasticTypeConfidence;
+
+        $routePredictions = is_array($prediction['route_predictions'] ?? null)
+            ? $prediction['route_predictions']
+            : [];
+
+        // For plastic, `predictions` contains Stage 2 subtype scores.
+        // For paper, Stage 2 is skipped and this array is empty.
         $allPredictions = is_array($prediction['predictions'] ?? null)
             ? $prediction['predictions']
             : [];
 
-        // Accept either 0..1 or 0..100 confidence from the Python service.
-        if ($confidence <= 1.0) {
-            $confidencePercent = $confidence * 100.0;
-        } else {
-            $confidencePercent = $confidence;
-        }
-
-        $minimumConfidence = (float) config('services.cnn.min_confidence', 0.70);
-        $minimumConfidencePercent = $minimumConfidence <= 1.0
-            ? $minimumConfidence * 100.0
-            : $minimumConfidence;
+        $routeIsKnown = in_array($route, ['paper', 'plastic'], true);
+        $routeIsConfident = $routeIsKnown
+            && $routeConfidencePercent >= $minimumRouteConfidencePercent;
 
         $type = $this->resolveRecyclableType($rawLabel);
-        $isConfident = $confidencePercent >= $minimumConfidencePercent;
 
-        $classificationStatus = ($type && $type->is_active && $isConfident)
+        $typeMatchesRoute = $type
+            && strtolower((string) $type->material_category) === $route;
+
+        // Paper has no Stage 2 subtype model; its classification confidence is
+        // the Stage 1 route confidence. Plastic must also pass the Stage 2
+        // subtype confidence threshold before points are awarded.
+        $typeIsConfident = $route === 'paper'
+            ? $routeIsConfident
+            : ($confidencePercent >= $minimumPlasticTypeConfidencePercent);
+
+        $classificationStatus = (
+            $routeIsConfident
+            && $type
+            && $type->is_active
+            && $typeMatchesRoute
+            && $typeIsConfident
+        )
             ? ($type->is_accepted ? 'valid' : 'rejected')
             : 'uncertain';
 
-        // Do not award points for inactive, rejected, unknown, or uncertain classes.
+        // Do not award points for inactive, rejected, unknown, route-uncertain,
+        // or subtype-uncertain classifications.
         $earnedPoints = (
-            $classificationStatus === 'valid' &&
-            $type &&
-            $type->is_accepted &&
-            $type->is_active
+            $classificationStatus === 'valid'
+            && $type
+            && $type->is_accepted
+            && $type->is_active
         ) ? (int) $type->points_value : 0;
+
+        // The physical compartment comes from Stage 1 only. This deliberately
+        // does not depend on Stage 2 subtype confidence. If Stage 1 confidently
+        // says plastic but the exact polymer is uncertain, the item can still
+        // be sorted into the plastic compartment, but it earns no points.
+        $compartment = $this->compartmentForRoute(
+            $route,
+            $routeIsConfident
+        );
 
         $transaction = DB::transaction(function () use (
             $smartBin,
             $rawLabel,
+            $route,
+            $routeConfidencePercent,
             $confidencePercent,
             $type,
             $classificationStatus,
@@ -161,8 +211,8 @@ class IotClassificationController extends Controller
 
             $model = AiModel::firstOrCreate(
                 [
-                    'name' => (string) config('services.cnn.model_name', 'Recyclable Classification CNN'),
-                    'version' => (string) config('services.cnn.model_version', '1.0.0'),
+                    'name' => (string) config('services.cnn.model_name', 'PLink Two-Stage Recyclable CNN'),
+                    'version' => (string) config('services.cnn.model_version', '2.0.0'),
                 ],
                 [
                     'framework' => 'TensorFlow/Keras',
@@ -174,11 +224,26 @@ class IotClassificationController extends Controller
                 'recycling_item_id' => $item->recycling_item_id,
                 'recyclable_type_id' => $type?->recyclable_type_id,
                 'model_id' => $model->model_id,
-                'confidence_score' => round($confidencePercent, 2),
+                'confidence_score' => round(
+                    $route === 'paper' ? $routeConfidencePercent : $confidencePercent,
+                    2
+                ),
                 'status' => $classificationStatus,
                 'notes' => $type
-                    ? "CNN label: {$rawLabel}"
-                    : "CNN label was not mapped to a recyclable type: {$rawLabel}",
+                    ? sprintf(
+                        'Two-stage CNN: route=%s (%.2f%%), label=%s (%.2f%%)',
+                        $route,
+                        $routeConfidencePercent,
+                        $rawLabel,
+                        $confidencePercent
+                    )
+                    : sprintf(
+                        'Two-stage CNN label was not mapped: route=%s (%.2f%%), label=%s (%.2f%%)',
+                        $route,
+                        $routeConfidencePercent,
+                        $rawLabel,
+                        $confidencePercent
+                    ),
                 'is_verified' => false,
                 'classified_at' => now(),
             ]);
@@ -217,24 +282,47 @@ class IotClassificationController extends Controller
             return $transaction->fresh();
         });
 
-        $compartment = $this->compartmentFor($type, $classificationStatus);
-
         return response()->json([
             'success' => true,
             'classification' => [
+                // Backward-compatible fields consumed by Controller 1.
                 'label' => $rawLabel,
                 'mapped_type_id' => $type?->recyclable_type_id,
                 'mapped_type_name' => $type?->name,
-                'confidence' => round($confidencePercent / 100, 4),
-                'confidence_percent' => round($confidencePercent, 2),
+                'confidence' => round(
+                    ($route === 'paper' ? $routeConfidencePercent : $confidencePercent) / 100,
+                    4
+                ),
+                'confidence_percent' => round(
+                    $route === 'paper' ? $routeConfidencePercent : $confidencePercent,
+                    2
+                ),
                 'status' => $classificationStatus,
                 'accepted' => $classificationStatus === 'valid',
                 'points' => $earnedPoints,
                 'compartment' => $compartment,
 
-                // Debug information from the Python CNN API.
-                // The ESP32 uses this only for Serial Monitor output.
-                'predictions' => $allPredictions,
+                // Two-stage details. Stage 1 is authoritative for routing.
+                'route' => $route,
+                'route_confidence' => round($routeConfidencePercent / 100, 4),
+                'route_confidence_percent' => round($routeConfidencePercent, 2),
+                'plastic_type' => $route === 'plastic' ? $rawLabel : null,
+                'plastic_type_confidence' => $route === 'plastic'
+                    ? round($confidencePercent / 100, 4)
+                    : null,
+                'plastic_type_confidence_percent' => $route === 'plastic'
+                    ? round($confidencePercent, 2)
+                    : null,
+
+                // `predictions` stays compatible with the current ESP32 Serial
+                // output. For plastic it contains Stage 2 subtype scores.
+                'predictions' => $route === 'plastic'
+                    ? $allPredictions
+                    : $routePredictions,
+                'route_predictions' => $routePredictions,
+                'plastic_type_predictions' => $route === 'plastic'
+                    ? $allPredictions
+                    : [],
             ],
             'session' => [
                 'transaction_code' => $transaction->transaction_code,
@@ -294,7 +382,7 @@ class IotClassificationController extends Controller
         $normalized = strtoupper(trim(preg_replace('/[_\-]+/', ' ', $rawLabel)));
         $normalized = preg_replace('/\s+/', ' ', $normalized);
 
-        // Map the exact CNN class names from ml_service/models/classnames.json
+        // Map Stage 2 plastic labels (and the Stage 1 paper compatibility label)
         // to the authoritative recyclable_types names stored in Laravel/MySQL.
         // Keep the shorter aliases too so older/test model outputs still work.
         $aliases = [
@@ -349,13 +437,13 @@ class IotClassificationController extends Controller
             ->first();
     }
 
-    private function compartmentFor(?RecyclableType $type, string $classificationStatus): string
+    private function compartmentForRoute(string $route, bool $routeIsConfident): string
     {
-        if (!$type || $classificationStatus !== 'valid') {
+        if (!$routeIsConfident) {
             return 'reject';
         }
 
-        return match (strtolower((string) $type->material_category)) {
+        return match (strtolower(trim($route))) {
             'paper' => 'paper',
             'plastic' => 'plastic',
             default => 'reject',
