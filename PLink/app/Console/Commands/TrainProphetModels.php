@@ -7,7 +7,7 @@ use Illuminate\Console\Command;
 
 class TrainProphetModels extends Command
 {
-    protected $signature = 'prophet:train';
+    protected $signature = 'prophet:train {--forecast-days=30 : Generate and store this many forecast days after successful training}';
 
     protected $description = 'Retrain all Prophet forecasting models using the latest historical data';
 
@@ -34,7 +34,17 @@ class TrainProphetModels extends Command
                 return self::FAILURE;
             }
 
-            $this->info('Prophet training completed successfully.');
+            $forecastDays = max(1, min(90, (int) $this->option('forecast-days')));
+
+            $this->info("Prophet training completed successfully. Generating {$forecastDays}-day forecasts...");
+            $forecastResult = $prophetService->forecastAll($forecastDays);
+
+            if (!empty($forecastResult['errors']) || !($forecastResult['success'] ?? true)) {
+                $this->warn('Models were trained, but one or more forecasts could not be generated.');
+                return self::FAILURE;
+            }
+
+            $this->info('Prophet forecasts generated and stored successfully.');
             return self::SUCCESS;
         } catch (\Throwable $e) {
             $this->error('Prophet training failed: ' . $e->getMessage());

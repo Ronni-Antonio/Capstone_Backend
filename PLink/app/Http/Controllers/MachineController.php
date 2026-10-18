@@ -1,16 +1,21 @@
 <?php
 namespace App\Http\Controllers;
 
-use App\Models\Notification;
 use App\Models\SmartBin;
 use App\Models\SmartBinCompartment;
 use App\Models\SmartBinCompartmentLog;
 use App\Models\ActivityLog;
+use App\Services\NotificationPreferenceService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class MachineController extends Controller
 {
+    public function __construct(
+        private readonly NotificationPreferenceService $notifications
+    ) {
+    }
+
     /**
      * Machine Monitoring payload.
      *
@@ -287,22 +292,47 @@ class MachineController extends Controller
         $bin->update([
             'current_fill_percentage' => $overallFill,
             'current_distance_cm' => $fullest?->current_distance_cm ?? $bin->current_distance_cm,
-            'status' => $overallFill >= 100 ? 'full' : ($bin->status === 'offline' ? 'offline' : 'online'),
+            // Receiving a sensor reading proves Controller 1 is online again.
+            'status' => $bin->status === 'maintenance'
+                ? 'maintenance'
+                : ($overallFill >= 100 ? 'full' : 'online'),
             'last_active_at' => now(),
         ]);
 
+        // The single "Machine Almost Full" preference controls both the 80%
+        // warning and the final full-capacity alert.
         if ($fill >= 100 && $oldFill < 100) {
-            Notification::create([
-                'smart_bin_id' => $bin->smart_bin_id,
-                'notification_type' => 'machine_full',
-                'title' => $target->name . ' is full',
-                'message' => "{$target->name} in {$bin->name} at {$bin->location} has reached full capacity.",
-                'data' => [
-                    'compartment_id' => $target->compartment_id,
-                    'material_category' => $target->material_category,
-                    'capacity_percentage' => (int) round($fill),
+            $this->notifications->createIfEnabled(
+                'notify_machine_full',
+                [
+                    'smart_bin_id' => $bin->smart_bin_id,
+                    'notification_type' => 'machine_full',
+                    'title' => $target->name . ' is full',
+                    'message' => "{$target->name} in {$bin->name} at {$bin->location} has reached full capacity.",
+                    'data' => [
+                        'compartment_id' => $target->compartment_id,
+                        'material_category' => $target->material_category,
+                        'capacity_percentage' => (int) round($fill),
+                    ],
                 ],
-            ]);
+                60
+            );
+        } elseif ($fill >= 80 && $oldFill < 80) {
+            $this->notifications->createIfEnabled(
+                'notify_machine_full',
+                [
+                    'smart_bin_id' => $bin->smart_bin_id,
+                    'notification_type' => 'machine_almost_full',
+                    'title' => $target->name . ' is almost full',
+                    'message' => "{$target->name} in {$bin->name} at {$bin->location} has reached " . (int) round($fill) . "% capacity.",
+                    'data' => [
+                        'compartment_id' => $target->compartment_id,
+                        'material_category' => $target->material_category,
+                        'capacity_percentage' => (int) round($fill),
+                    ],
+                ],
+                60
+            );
         }
 
         return response()->json([

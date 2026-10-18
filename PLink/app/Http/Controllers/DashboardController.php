@@ -3,7 +3,6 @@
 namespace App\Http\Controllers;
 
 use App\Models\RecyclingTransaction;
-use App\Models\SmartBin;
 use App\Models\Students;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -12,16 +11,10 @@ class DashboardController extends Controller
 {
     public function index()
     {
-        // A short cache keeps the dashboard fast without making IoT/transaction
-        // changes feel stale for long. Bump the key whenever the payload changes.
-        $payload = Cache::remember('dashboard.summary.v7', 15, function () {
+        $payload = Cache::remember('dashboard.summary.v8', 15, function () {
             $weekStart = now()->subDays(6)->startOfDay();
-            $monthStart = now()->subDays(29)->startOfDay();
-
             $totalStudents = Students::count();
 
-            // "Participating" means the student has completed at least one
-            // recycling transaction. This is more meaningful than account status.
             $participatingStudents = RecyclingTransaction::query()
                 ->where('status', 'completed')
                 ->whereNotNull('student_id')
@@ -32,10 +25,6 @@ class DashboardController extends Controller
             $totalItems = (int) (clone $completed)->sum('total_items');
             $totalPoints = (int) (clone $completed)->sum('total_points');
 
-            // -----------------------------------------------------------------
-            // Reusable seven-day date skeleton. It guarantees that graphs show
-            // all seven days even when a day has zero transactions/redemptions.
-            // -----------------------------------------------------------------
             $sevenDays = collect(range(0, 6))->map(function ($offset) {
                 $date = now()->subDays(6 - $offset)->startOfDay();
 
@@ -45,11 +34,7 @@ class DashboardController extends Controller
                 ];
             });
 
-            // -----------------------------------------------------------------
-            // Daily waste collection (all accepted/rejected items represented by
-            // completed transaction totals). This is intentionally material-neutral
-            // now that the bin accepts both plastic and paper.
-            // -----------------------------------------------------------------
+            // Daily waste collection report + collection-trend source.
             $dailyRaw = RecyclingTransaction::query()
                 ->where('status', 'completed')
                 ->where('started_at', '>=', $weekStart)
@@ -70,32 +55,7 @@ class DashboardController extends Controller
                 ];
             });
 
-            // -----------------------------------------------------------------
-            // Student participation trend: unique students who completed at least
-            // one recycling transaction on each day during the last seven days.
-            // -----------------------------------------------------------------
-            $participationRaw = RecyclingTransaction::query()
-                ->where('status', 'completed')
-                ->where('started_at', '>=', $weekStart)
-                ->whereNotNull('student_id')
-                ->selectRaw('DATE(started_at) as date')
-                ->selectRaw('COUNT(DISTINCT student_id) as participants')
-                ->groupByRaw('DATE(started_at)')
-                ->get()
-                ->keyBy('date');
-
-            $participationTrend = $sevenDays->map(function ($day) use ($participationRaw) {
-                return [
-                    'date' => $day['date'],
-                    'participants' => (int) ($participationRaw->get($day['date'])->participants ?? 0),
-                ];
-            });
-
-            // -----------------------------------------------------------------
-            // Recyclable type statistics. Group by the actual CNN-classified
-            // recyclable type (PET, HDPE, PP, Paper, etc.) instead of collapsing
-            // everything into only Plastic and Paper.
-            // -----------------------------------------------------------------
+            // Waste category statistics by actual CNN-classified recyclable type.
             $wasteCategories = DB::table('recycling_items as ri')
                 ->join('recycling_transactions as rt_tx', 'rt_tx.transaction_id', '=', 'ri.transaction_id')
                 ->join('ai_classifications as ac', 'ac.recycling_item_id', '=', 'ri.recycling_item_id')
@@ -129,7 +89,7 @@ class DashboardController extends Controller
                         'PC Bottle' => 'PC',
                         'PLA Plastic' => 'PLA',
                         'White Paper' => 'Paper',
-                        'Contaminated PET Bottle' => 'Contaminated PET',
+                        'Dirty / Damaged Recyclable Material' => 'Crushed / Dirty',
                         default => $row->name,
                     };
 
@@ -143,41 +103,7 @@ class DashboardController extends Controller
                     ];
                 });
 
-            // -----------------------------------------------------------------
-            // Weekly waste collection for every section.
-            // -----------------------------------------------------------------
-            $weeklySectionActivity = RecyclingTransaction::query()
-                ->join('students', 'students.student_id', '=', 'recycling_transactions.student_id')
-                ->where('recycling_transactions.status', 'completed')
-                ->where('recycling_transactions.started_at', '>=', $weekStart)
-                ->select('students.section_id')
-                ->selectRaw('SUM(recycling_transactions.total_items) as total_items')
-                ->selectRaw('SUM(recycling_transactions.total_points) as total_points')
-                ->groupBy('students.section_id');
-
-            $sectionStats = DB::table('sections')
-                ->leftJoinSub($weeklySectionActivity, 'weekly_activity', function ($join) {
-                    $join->on('sections.section_id', '=', 'weekly_activity.section_id');
-                })
-                ->select('sections.section_id', 'sections.name')
-                ->selectRaw('COALESCE(weekly_activity.total_items, 0) as total_items')
-                ->selectRaw('COALESCE(weekly_activity.total_points, 0) as total_points')
-                ->orderBy('sections.name')
-                ->get()
-                ->map(fn ($row) => [
-                    'section_id' => (int) $row->section_id,
-                    'name' => $row->name,
-                    'total_items' => (int) $row->total_items,
-                    'total_points' => (int) $row->total_points,
-                ]);
-
-            $topSection = $sectionStats->sortByDesc('total_items')->first();
-
-            // -----------------------------------------------------------------
-            // Top five recyclers by POINTS EARNED, not by current balance. Current
-            // balance can decrease after reward redemptions and is not a ranking of
-            // recycling performance.
-            // -----------------------------------------------------------------
+            // User ranking: top five students by points earned from recycling.
             $topRecyclers = RecyclingTransaction::query()
                 ->join('students', 'students.student_id', '=', 'recycling_transactions.student_id')
                 ->where('recycling_transactions.status', 'completed')
@@ -207,80 +133,31 @@ class DashboardController extends Controller
                     'total_items' => (int) $row->total_items,
                 ]);
 
-            // -----------------------------------------------------------------
-            // Recent reward redemption graph: seven-day frequency + points spent.
-            // -----------------------------------------------------------------
-            $redemptionRaw = DB::table('redemptions')
-                ->whereNotNull('redeemed_at')
-                ->where('redeemed_at', '>=', $weekStart)
-                ->selectRaw('DATE(redeemed_at) as date')
-                ->selectRaw('COUNT(*) as redemptions')
-                ->selectRaw('COALESCE(SUM(points_spent), 0) as points_spent')
-                ->groupByRaw('DATE(redeemed_at)')
-                ->get()
-                ->keyBy('date');
-
-            $rewardRedemptionsTrend = $sevenDays->map(function ($day) use ($redemptionRaw) {
-                $row = $redemptionRaw->get($day['date']);
-
-                return [
-                    'date' => $day['date'],
-                    'redemptions' => (int) ($row->redemptions ?? 0),
-                    'points_spent' => (int) ($row->points_spent ?? 0),
-                ];
-            });
-
-            // Which rewards have been redeemed most during the recent 30-day window.
-            $rewardBreakdown = DB::table('redemptions')
-                ->join('rewards', 'rewards.reward_id', '=', 'redemptions.reward_id')
-                ->whereNotNull('redemptions.redeemed_at')
-                ->where('redemptions.redeemed_at', '>=', $monthStart)
-                ->select('rewards.reward_id', 'rewards.reward_name')
-                ->selectRaw('COUNT(*) as redemption_count')
-                ->selectRaw('COALESCE(SUM(redemptions.points_spent), 0) as points_spent')
-                ->groupBy('rewards.reward_id', 'rewards.reward_name')
-                ->orderByDesc('redemption_count')
-                ->limit(5)
+            // Reward history: latest completed redemptions.
+            $rewardHistory = DB::table('redemptions as rd')
+                ->join('students as s', 's.student_id', '=', 'rd.student_id')
+                ->join('rewards as r', 'r.reward_id', '=', 'rd.reward_id')
+                ->whereNotNull('rd.redeemed_at')
+                ->select([
+                    'rd.redemption_id',
+                    'rd.redeemed_at',
+                    'rd.points_spent',
+                    'r.reward_name',
+                    's.student_number',
+                    's.first_name',
+                    's.last_name',
+                ])
+                ->orderByDesc('rd.redeemed_at')
+                ->limit(8)
                 ->get()
                 ->map(fn ($row) => [
-                    'reward_id' => (int) $row->reward_id,
-                    'reward_name' => $row->reward_name,
-                    'redemption_count' => (int) $row->redemption_count,
+                    'redemption_id' => (int) $row->redemption_id,
+                    'redeemed_at' => $row->redeemed_at,
                     'points_spent' => (int) $row->points_spent,
+                    'reward_name' => $row->reward_name,
+                    'student_number' => $row->student_number,
+                    'student_name' => trim($row->first_name . ' ' . $row->last_name),
                 ]);
-
-            // -----------------------------------------------------------------
-            // Smart bin + BOTH physical compartment fullness values.
-            // -----------------------------------------------------------------
-            $smartBin = SmartBin::query()
-                ->with(['compartments' => function ($query) {
-                    $query->select([
-                        'compartment_id', 'smart_bin_id', 'name',
-                        'material_category', 'status', 'current_distance_cm',
-                        'current_fill_percentage', 'full_threshold_cm',
-                        'empty_threshold_cm', 'last_active_at',
-                    ])->orderBy('compartment_id');
-                }])
-                ->select([
-                    'smart_bin_id', 'name', 'location', 'status', 'last_active_at',
-                ])
-                ->first();
-
-            if ($smartBin) {
-                $smartBin->setRelation('compartments', $smartBin->compartments->map(function ($compartment) {
-                    $hasReading = $compartment->current_distance_cm !== null && $compartment->last_active_at !== null;
-                    $isStale = $hasReading && $compartment->last_active_at->lt(now()->subSeconds(20));
-                    $fill = (int) round(max(0, min(100, (float) ($compartment->current_fill_percentage ?? 0))));
-
-                    $compartment->setAttribute('current_fill_percentage', $fill);
-                    $compartment->setAttribute('fill_state', !$hasReading || $isStale
-                        ? 'offline'
-                        : ($fill >= 100 ? 'full' : ($fill >= 80 ? 'almost_full' : 'normal')));
-                    $compartment->setAttribute('sensor_online', $hasReading && !$isStale);
-
-                    return $compartment;
-                })->values());
-            }
 
             return [
                 'summary' => [
@@ -289,17 +166,12 @@ class DashboardController extends Controller
                     'total_items' => $totalItems,
                     'total_points' => $totalPoints,
                 ],
-                'smart_bin' => $smartBin,
-                'waste_categories' => $wasteCategories->values(),
-                'participation_trend' => $participationTrend,
-                'section_stats' => $sectionStats->values(),
-                'top_section' => $topSection ?: null,
-                'top_recyclers' => $topRecyclers,
-                // Backward-compatible alias for older dashboard code.
-                'user_ranking' => $topRecyclers,
                 'daily_recycling' => $dailyRecycling,
-                'reward_redemptions_trend' => $rewardRedemptionsTrend,
-                'reward_breakdown' => $rewardBreakdown,
+                'collection_trends' => $dailyRecycling,
+                'waste_categories' => $wasteCategories->values(),
+                'top_recyclers' => $topRecyclers,
+                'user_ranking' => $topRecyclers,
+                'reward_history' => $rewardHistory->values(),
             ];
         });
 
