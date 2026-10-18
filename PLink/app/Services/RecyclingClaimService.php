@@ -11,6 +11,11 @@ use Illuminate\Support\Facades\DB;
 
 class RecyclingClaimService
 {
+    public function __construct(
+        private readonly NotificationPreferenceService $notifications
+    ) {
+    }
+
     /**
      * Claims the most recent Controller-1 recycling transaction when a student
      * taps their active RFID card on Controller 2.
@@ -79,6 +84,8 @@ class RecyclingClaimService
                 'completed_at' => now(),
             ]);
 
+            $previousPointsBalance = (int) $student->points_balance;
+
             if ($totalPoints > 0) {
                 PointTransaction::create([
                     'student_id' => $student->student_id,
@@ -120,6 +127,32 @@ class RecyclingClaimService
                         'points' => $totalPoints,
                     ]
                 );
+
+                // Milestones are awarded in 100-point steps. Notify only when
+                // the latest claim crosses into a new milestone band.
+                $newPointsBalance = (int) $student->points_balance;
+                $previousMilestone = intdiv(max(0, $previousPointsBalance), 100);
+                $newMilestone = intdiv(max(0, $newPointsBalance), 100);
+
+                if ($newMilestone > $previousMilestone && $newMilestone > 0) {
+                    $milestonePoints = $newMilestone * 100;
+
+                    $this->notifications->createIfEnabled(
+                        'notify_milestones',
+                        [
+                            'student_id' => $student->student_id,
+                            'smart_bin_id' => $smartBinId,
+                            'notification_type' => 'student_milestone',
+                            'title' => "{$studentName} reached {$milestonePoints} points",
+                            'message' => "{$studentName} has reached a recycling milestone of {$milestonePoints} total points.",
+                            'data' => [
+                                'milestone_points' => $milestonePoints,
+                                'current_points_balance' => $newPointsBalance,
+                                'transaction_code' => $transaction->transaction_code,
+                            ],
+                        ]
+                    );
+                }
             }
 
             return [

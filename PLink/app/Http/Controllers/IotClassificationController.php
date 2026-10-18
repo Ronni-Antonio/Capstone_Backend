@@ -8,6 +8,7 @@ use App\Models\RecyclableType;
 use App\Models\RecyclingItem;
 use App\Models\RecyclingTransaction;
 use App\Models\SmartBin;
+use App\Services\NotificationPreferenceService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -15,6 +16,11 @@ use Illuminate\Support\Str;
 
 class IotClassificationController extends Controller
 {
+    public function __construct(
+        private readonly NotificationPreferenceService $notifications
+    ) {
+    }
+
     /**
      * ESP32 Controller 1 sends one raw JPEG per detected recyclable.
      *
@@ -82,6 +88,10 @@ class IotClassificationController extends Controller
                 ->post($cnnUrl . '/predict');
         } catch (\Throwable $e) {
             report($e);
+            $this->notifications->recordScannerError(
+                (int) $smartBin->smart_bin_id,
+                'CNN service unavailable: ' . $e->getMessage()
+            );
 
             return response()->json([
                 'success' => false,
@@ -90,6 +100,11 @@ class IotClassificationController extends Controller
         }
 
         if (!$cnnResponse->successful()) {
+            $this->notifications->recordScannerError(
+                (int) $smartBin->smart_bin_id,
+                'CNN HTTP ' . $cnnResponse->status()
+            );
+
             return response()->json([
                 'success' => false,
                 'message' => 'CNN service rejected the image.',
