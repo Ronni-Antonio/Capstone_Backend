@@ -177,7 +177,9 @@ class ActivityLogController extends Controller
         }
 
         $inventoryActivity = ($actionCounts['RESTOCK_INVENTORY'] ?? 0)
-            + ($actionCounts['UPDATE_INVENTORY_QTY'] ?? 0);
+            + ($actionCounts['UPDATE_INVENTORY_QTY'] ?? 0)
+            + ($actionCounts['INVENTORY_LOW_STOCK'] ?? 0)
+            + ($actionCounts['INVENTORY_OUT_OF_STOCK'] ?? 0);
 
         $redemptionActivity = ($actionCounts['REDEEM_REWARD'] ?? 0)
             + ($actionCounts['POINTS_DEDUCTED'] ?? 0);
@@ -209,7 +211,9 @@ class ActivityLogController extends Controller
             + ($actionCounts['UPDATE_REWARD'] ?? 0)
             + ($actionCounts['DELETE_REWARD'] ?? 0)
             + ($actionCounts['RESTOCK_INVENTORY'] ?? 0)
-            + ($actionCounts['UPDATE_INVENTORY_QTY'] ?? 0);
+            + ($actionCounts['UPDATE_INVENTORY_QTY'] ?? 0)
+            + ($actionCounts['INVENTORY_LOW_STOCK'] ?? 0)
+            + ($actionCounts['INVENTORY_OUT_OF_STOCK'] ?? 0);
 
         $recently = now()->subHours(24);
         $last24hBaseQuery = clone $baseQuery;
