@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\ActivityLog;
 use App\Models\Notification;
 use App\Models\Rewards;
 
@@ -53,6 +54,63 @@ class RewardStockAlertService
         }
 
         $this->createOrRefreshAlert($reward, $currentStatus);
+        $this->recordInventoryStateLog(
+            $reward,
+            $currentStatus,
+            $previousStock,
+            $previousStatus
+        );
+    }
+
+    private function recordInventoryStateLog(
+        Rewards $reward,
+        string $status,
+        ?int $previousStock,
+        ?string $previousStatus
+    ): void {
+        $stock = (int) $reward->stock_quantity;
+        $threshold = max(0, (int) ($reward->low_stock_threshold ?? 10));
+        $userId = request()->user()?->id;
+
+        if ($status === 'out') {
+            ActivityLog::record(
+                'INVENTORY_OUT_OF_STOCK',
+                "Inventory for \"{$reward->reward_name}\" is out of stock ({$stock} units remaining).",
+                'Inventory',
+                $userId,
+                null,
+                [
+                    'reward_id' => (int) $reward->reward_id,
+                    'reward_name' => $reward->reward_name,
+                    'stock_quantity' => $stock,
+                    'low_stock_threshold' => $threshold,
+                    'inventory_status' => 'out_of_stock',
+                    'previous_stock' => $previousStock,
+                    'previous_status' => $previousStatus,
+                ]
+            );
+
+            return;
+        }
+
+        ActivityLog::record(
+            'INVENTORY_LOW_STOCK',
+            "Inventory for \"{$reward->reward_name}\" is low: {$stock} unit" .
+                ($stock === 1 ? '' : 's') .
+                " remaining (threshold: {$threshold}).",
+            'Inventory',
+            $userId,
+            null,
+            [
+                'reward_id' => (int) $reward->reward_id,
+                'reward_name' => $reward->reward_name,
+                'stock_quantity' => $stock,
+                'low_stock_threshold' => $threshold,
+                'inventory_status' => 'low_stock',
+                'previous_stock' => $previousStock,
+                'previous_status' => $previousStatus,
+            ]
+        );
     }
 
     private function statusFor(int $stock, int $threshold): string

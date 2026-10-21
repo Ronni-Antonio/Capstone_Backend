@@ -76,6 +76,8 @@ class ActivityLog extends Model
         'DELETE_REWARD',
         'RESTOCK_INVENTORY',
         'UPDATE_INVENTORY_QTY',
+        'INVENTORY_LOW_STOCK',
+        'INVENTORY_OUT_OF_STOCK',
         'ADD_MACHINE',
         'UPDATE_MACHINE',
         'DELETE_MACHINE',
