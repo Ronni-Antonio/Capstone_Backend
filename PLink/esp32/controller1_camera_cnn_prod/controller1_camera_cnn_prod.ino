@@ -60,11 +60,11 @@ const unsigned long RFID_DEBOUNCE_MS = 1000;
 
 static const char* FALLBACK_SSID =
 
-    "Infinix GT 30";
+    "roni";
 
 static const char* FALLBACK_PASSWORD =
 
-    "polu3308";
+    "xmlxsldtd";
 
 // ============================================================
 

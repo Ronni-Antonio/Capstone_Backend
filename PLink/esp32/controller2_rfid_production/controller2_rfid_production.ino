@@ -30,7 +30,7 @@ Preferences preferences;
 
 // PLink Controller 2
 
-// RFID assignment + identification + reward confirmation
+// RFID assignment/reassignment + identification + reward confirmation
 
 // Outbound HTTPS only; no WebServer or router port-forwarding.
 
@@ -103,6 +103,8 @@ long currentCommandId = 0;
 String pendingStudentId = "";
 
 String pendingRewardId = "";
+
+String pendingAssignmentMode = "assign";
 
 
 
@@ -177,6 +179,8 @@ void clearCurrentCommand() {
   pendingStudentId = "";
 
   pendingRewardId = "";
+
+  pendingAssignmentMode = "assign";
 
   currentCommandStartedAt = 0;
 
@@ -870,11 +874,25 @@ void pollNextCommand() {
 
     pendingStudentId = payload["student_id"].as<String>();
 
+    pendingAssignmentMode = payload["assignment_mode"] | "assign";
+
+    pendingAssignmentMode.toLowerCase();
+
     currentMode = MODE_ASSIGN_CARD;
 
-    Serial.printf("\nASSIGN CARD #%ld for student %s. Tap card now.\n",
+    if (pendingAssignmentMode == "reassign") {
 
-                  currentCommandId, pendingStudentId.c_str());
+      Serial.printf("\nREASSIGN RFID #%ld for student %s. Tap the NEW replacement card now.\n",
+
+                    currentCommandId, pendingStudentId.c_str());
+
+    } else {
+
+      Serial.printf("\nASSIGN RFID #%ld for student %s. Tap card now.\n",
+
+                    currentCommandId, pendingStudentId.c_str());
+
+    }
 
     return;
 
@@ -956,9 +974,16 @@ void assignCard(const String& cardUid) {
 
   JsonDocument doc;
 
+  // command_id ties this exact tap to the assignment request that the
+  // frontend queued. Laravel completes the card update and command state
+  // atomically, so an HTTP retry cannot replace the card twice.
+  doc["command_id"] = currentCommandId;
+
   doc["student_id"] = pendingStudentId;
 
   doc["card_uid"] = cardUid;
+
+  doc["assignment_mode"] = pendingAssignmentMode;
 
   String body;
 
@@ -980,7 +1005,13 @@ void assignCard(const String& cardUid) {
 
   if (isHttpSuccess(code)) {
 
-    acknowledgeCommand(currentCommandId, "completed", "RFID card assigned successfully.");
+    String successMessage = pendingAssignmentMode == "reassign"
+      ? "RFID card reassigned successfully."
+      : "RFID card assigned successfully.";
+
+    // Laravel already marks the command completed when command_id is sent.
+    // This ACK is intentionally kept as an idempotent confirmation.
+    acknowledgeCommand(currentCommandId, "completed", successMessage);
 
     clearCurrentCommand();
 
