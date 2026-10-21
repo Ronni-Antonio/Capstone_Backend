@@ -7,6 +7,7 @@ use App\Models\GradeLevel;
 use App\Models\Section;
 use App\Models\RfidCard;
 use App\Models\ActivityLog;
+use App\Models\IotControllerCommand;
 use App\Services\IotCommandService;
 use App\Services\RecyclingClaimService;
 use Illuminate\Http\Request;
@@ -454,119 +455,265 @@ class StudentController extends Controller
         ]);
     }
 
+
+    /**
+     * Controller 2 finalizes both first-time RFID assignment and replacement.
+     *
+     * The same endpoint is intentionally used for both operations so existing
+     * frontend code does not need a separate "replace card" API. The command
+     * payload tells Controller 2 whether this is an initial assignment or a
+     * reassignment, while this method enforces the actual database rules.
+     *
+     * Safe reassignment rules:
+     * - Every student may have only one active RFID card after completion.
+     * - The previous active card is kept for history but marked "unassigned".
+     * - A previously used card belonging to the SAME student may be reactivated.
+     * - A card that belongs to ANOTHER student is never silently stolen.
+     * - command_id is optional for backward compatibility with older Controller 2
+     *   firmware, but the revised firmware sends it so assignment + command
+     *   completion are atomic/idempotent.
+     */
     public function assignCard(Request $request)
     {
+        $this->authorizeController2($request);
+
         $validated = $request->validate([
-            'student_id' =>
-                'required|exists:students,student_id',
-            'card_uid' =>
-                'required|string|max:100|unique:rfid_cards,card_uid',
+            'student_id' => 'required|exists:students,student_id',
+            'card_uid' => 'required|string|max:100',
+            'command_id' => 'nullable|integer|exists:iot_controller_commands,command_id',
         ]);
 
-        $card = DB::transaction(
-            function () use ($validated, $request) {
-                $student = Students::lockForUpdate()
-                    ->findOrFail(
-                        $validated['student_id']
-                    );
+        $normalizedUid = strtoupper(trim($validated['card_uid']));
+        $commandId = isset($validated['command_id'])
+            ? (int) $validated['command_id']
+            : null;
 
-                RfidCard::where(
-                    'student_id',
-                    $student->student_id
-                )
-                    ->where(
-                        'status',
-                        'active'
-                    )
-                    ->update([
-                        'status' => 'unassigned'
-                    ]);
+        $result = DB::transaction(function () use (
+            $validated,
+            $normalizedUid,
+            $commandId,
+            $request
+        ) {
+            $command = null;
 
+            if ($commandId !== null) {
+                $command = IotControllerCommand::query()
+                    ->where('command_id', $commandId)
+                    ->where('controller_code', 'controller-2')
+                    ->where('command_type', 'assign_card')
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                $payload = $command->payload ?? [];
+
+                if ((int) ($payload['student_id'] ?? 0) !== (int) $validated['student_id']) {
+                    abort(409, 'The RFID assignment command does not match the selected student.');
+                }
+
+                if ($command->status === 'completed') {
+                    $student = Students::with([
+                        'rfidCards' => fn ($query) => $query->where('status', 'active')
+                    ])->findOrFail($validated['student_id']);
+
+                    return [
+                        'already_processed' => true,
+                        'assignment_mode' => $payload['assignment_mode'] ?? 'assign',
+                        'student' => $student,
+                        'card' => $student->rfidCards->first(),
+                    ];
+                }
+
+                if (in_array($command->status, ['failed', 'cancelled', 'expired'], true)) {
+                    abort(409, "This RFID assignment command is already {$command->status}.");
+                }
+            }
+
+            $student = Students::lockForUpdate()
+                ->findOrFail($validated['student_id']);
+
+            // Lock the scanned UID if it already exists anywhere in the system.
+            $scannedCard = RfidCard::query()
+                ->where('card_uid', $normalizedUid)
+                ->lockForUpdate()
+                ->first();
+
+            if (
+                $scannedCard &&
+                (int) $scannedCard->student_id !== (int) $student->student_id
+            ) {
+                abort(
+                    409,
+                    'This RFID card is already registered to another student. Use a different card.'
+                );
+            }
+
+            // Lock all currently active cards for this student before changing any.
+            $activeCards = RfidCard::query()
+                ->where('student_id', $student->student_id)
+                ->where('status', 'active')
+                ->lockForUpdate()
+                ->get();
+
+            $previousActiveUids = $activeCards
+                ->pluck('card_uid')
+                ->map(fn ($uid) => strtoupper((string) $uid))
+                ->values()
+                ->all();
+
+            $hadDifferentActiveCard = collect($previousActiveUids)
+                ->contains(fn ($uid) => $uid !== $normalizedUid);
+
+            // Keep the old card rows for historical/audit purposes, but ensure
+            // only the scanned replacement remains active.
+            RfidCard::query()
+                ->where('student_id', $student->student_id)
+                ->where('status', 'active')
+                ->where('card_uid', '!=', $normalizedUid)
+                ->update([
+                    'status' => 'unassigned',
+                ]);
+
+            if ($scannedCard) {
+                // This lets the same student reuse one of their previously
+                // unassigned/lost cards without violating the unique UID index.
+                $scannedCard->update([
+                    'status' => 'active',
+                    'assigned_at' => now(),
+                ]);
+                $card = $scannedCard->fresh();
+            } else {
                 $card = RfidCard::create([
-                    'student_id' =>
-                        $student->student_id,
-                    'card_uid' =>
-                        strtoupper(
-                            trim(
-                                $validated['card_uid']
-                            )
-                        ),
-                    'status' =>
-                        'active',
-                    'assigned_at' =>
-                        now()
+                    'student_id' => $student->student_id,
+                    'card_uid' => $normalizedUid,
+                    'status' => 'active',
+                    'assigned_at' => now(),
                 ]);
+            }
 
-                $oldStatus = $student->status;
+            $oldStudentStatus = $student->status;
 
+            if ($student->status !== 'active') {
                 $student->update([
-                    'status' => 'active'
+                    'status' => 'active',
                 ]);
+            }
 
-                $studentName = trim(
-                    ($student->first_name ?? '') . ' ' .
-                    ($student->last_name ?? '')
-                ) ?: "Student #{$student->student_id}";
+            $assignmentMode = $hadDifferentActiveCard
+                ? 'reassign'
+                : 'assign';
 
+            $studentName = trim(
+                ($student->first_name ?? '') . ' ' .
+                ($student->last_name ?? '')
+            ) ?: "Student #{$student->student_id}";
+
+            if ($assignmentMode === 'reassign') {
                 ActivityLog::record(
-                    'ASSIGN_RFID_CARD',
-                    "RFID card assigned to {$studentName}. Card UID: {$validated['card_uid']}.",
+                    'REASSIGN_RFID_CARD',
+                    "RFID card replaced for {$studentName}. The previous active card was deactivated and the newly scanned card is now active.",
                     'Machine',
                     $request->user()?->id,
                     $student->student_id,
                     [
-                        'card_uid' =>
-                            $validated['card_uid'],
-                        'old_status' =>
-                            $oldStatus,
-                        'new_status' =>
-                            'active'
+                        'previous_card_uids' => $previousActiveUids,
+                        'new_card_uid' => $normalizedUid,
+                        'old_student_status' => $oldStudentStatus,
+                        'new_student_status' => 'active',
+                        'iot_command_id' => $commandId,
                     ]
                 );
-
-                return $card;
+            } else {
+                ActivityLog::record(
+                    'ASSIGN_RFID_CARD',
+                    "RFID card assigned to {$studentName}.",
+                    'Machine',
+                    $request->user()?->id,
+                    $student->student_id,
+                    [
+                        'card_uid' => $normalizedUid,
+                        'old_student_status' => $oldStudentStatus,
+                        'new_student_status' => 'active',
+                        'iot_command_id' => $commandId,
+                    ]
+                );
             }
-        );
+
+            // Revised Controller 2 sends command_id. Completing the command in
+            // this SAME transaction makes retries idempotent and prevents a card
+            // replacement from being applied twice after a network retry.
+            if ($command) {
+                $command->update([
+                    'status' => 'completed',
+                    'result_message' => $assignmentMode === 'reassign'
+                        ? 'RFID card reassigned successfully.'
+                        : 'RFID card assigned successfully.',
+                    'completed_at' => now(),
+                ]);
+            }
+
+            return [
+                'already_processed' => false,
+                'assignment_mode' => $assignmentMode,
+                'student' => $student->fresh([
+                    'gradeLevel',
+                    'section',
+                    'rfidCards',
+                ]),
+                'card' => $card,
+            ];
+        });
 
         return response()->json([
             'status' => 'success',
-            'message' => 'Card paired successfully',
-            'card' => $card
-        ], 201);
+            'message' => ($result['assignment_mode'] ?? 'assign') === 'reassign'
+                ? 'RFID card reassigned successfully.'
+                : 'RFID card paired successfully.',
+            'already_processed' => (bool) ($result['already_processed'] ?? false),
+            'assignment_mode' => $result['assignment_mode'] ?? 'assign',
+            'student' => $result['student'] ?? null,
+            'card' => $result['card'] ?? null,
+        ], ($result['already_processed'] ?? false) ? 200 : 201);
     }
 
     public function activate(
         string $id,
         IotCommandService $commands
     ) {
-        $student = Students::findOrFail($id);
+        $student = Students::with([
+            'rfidCards' => fn ($query) => $query->where('status', 'active')
+        ])->findOrFail($id);
 
+        $hasActiveCard = $student->rfidCards->isNotEmpty();
+        $assignmentMode = $hasActiveCard ? 'reassign' : 'assign';
+
+        // Keep command_type = assign_card for backward compatibility with the
+        // existing Controller 2 firmware. The revised firmware reads
+        // assignment_mode and displays the correct replacement prompt.
         $command = $commands->queue(
             'controller-2',
             'assign_card',
             [
-                'student_id' =>
-                    (int) $student->student_id,
-                'student_number' =>
-                    $student->student_number,
-                'student_name' =>
-                    trim(
-                        ($student->first_name ?? '') . ' ' .
-                        ($student->last_name ?? '')
-                    ),
+                'student_id' => (int) $student->student_id,
+                'student_number' => $student->student_number,
+                'student_name' => trim(
+                    ($student->first_name ?? '') . ' ' .
+                    ($student->last_name ?? '')
+                ),
+                'assignment_mode' => $assignmentMode,
+                'has_active_card' => $hasActiveCard,
             ],
             180
         );
 
         return response()->json([
-            'message' =>
-                'RFID assignment queued. Please tap the student card on Controller 2.',
-            'student_id' =>
-                (int) $student->student_id,
-            'command_id' =>
-                (int) $command->command_id,
-            'status' =>
-                $command->status,
+            'message' => $hasActiveCard
+                ? 'RFID replacement queued. Please tap the NEW replacement card on Controller 2.'
+                : 'RFID assignment queued. Please tap the student card on Controller 2.',
+            'student_id' => (int) $student->student_id,
+            'command_id' => (int) $command->command_id,
+            'status' => $command->status,
+            'assignment_mode' => $assignmentMode,
+            'has_active_card' => $hasActiveCard,
         ]);
     }
 
@@ -605,27 +752,36 @@ class StudentController extends Controller
             default => 'pending',
         };
 
+        $payload = $command->payload ?? [];
+
         return response()->json([
             'status' => $status,
             'command_status' => $command->status,
             'command_id' => $command->command_id,
             'message' => $command->result_message,
+            'assignment_mode' => $payload['assignment_mode'] ?? 'assign',
         ]);
     }
 
-    public function cancelActivation(
-        string $id,
-        IotCommandService $commands
-    ) {
-        $commands->cancelOutstanding(
-            'controller-2',
-            'assign_card'
-        );
+    public function cancelActivation(string $id)
+    {
+        $student = Students::findOrFail($id);
+
+        $cancelled = IotControllerCommand::query()
+            ->where('controller_code', 'controller-2')
+            ->where('command_type', 'assign_card')
+            ->where('payload->student_id', (int) $student->student_id)
+            ->whereIn('status', ['pending', 'claimed'])
+            ->update([
+                'status' => 'cancelled',
+                'result_message' => 'RFID assignment cancelled by the application.',
+                'completed_at' => now(),
+            ]);
 
         return response()->json([
             'success' => true,
-            'message' =>
-                'RFID assignment cancelled.',
+            'cancelled_commands' => $cancelled,
+            'message' => 'RFID assignment cancelled.',
         ]);
     }
 
@@ -798,6 +954,23 @@ class StudentController extends Controller
         return response()->json([
             'success' => true
         ]);
+    }
+
+    /**
+     * Device authentication for Controller 2 RFID operations.
+     */
+    private function authorizeController2(Request $request): void
+    {
+        $expected = (string) config('services.iot.controller_2_key');
+        $provided = (string) $request->header('X-Device-Key', '');
+
+        abort_if(
+            $expected === '' ||
+            $provided === '' ||
+            !hash_equals($expected, $provided),
+            401,
+            'Invalid Controller 2 device key.'
+        );
     }
 
     public function destroy(string $id)
