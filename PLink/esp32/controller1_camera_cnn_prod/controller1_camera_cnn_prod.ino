@@ -64,7 +64,7 @@ static const char* FALLBACK_SSID =
 
 static const char* FALLBACK_PASSWORD =
 
-    "xmlxsldtd";
+    "xmlxsldtd1";
 
 // ============================================================
 
