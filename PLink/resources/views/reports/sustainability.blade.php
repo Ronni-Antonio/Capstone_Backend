@@ -135,7 +135,6 @@
 
         .section {
             margin-top: 20px;
-            page-break-inside: avoid;
         }
 
         .section-title {
@@ -145,12 +144,14 @@
             margin: 0 0 4px;
             padding-bottom: 6px;
             border-bottom: 2px solid #2776c0;
+            page-break-after: avoid;
         }
 
         .section-note {
             margin: 0 0 11px;
             color: #6c8099;
             font-size: 8.5pt;
+            page-break-after: avoid;
         }
 
         .summary-table {
@@ -289,10 +290,6 @@
             color: #536b84;
             font-size: 8pt;
             page-break-inside: avoid;
-        }
-
-        .page-break {
-            page-break-before: always;
         }
     </style>
 </head>
@@ -535,8 +532,6 @@
             </table>
         @endif
     </section>
-
-    <div class="page-break"></div>
 
     <section class="section" style="margin-top: 0;">
         <div class="section-title">5. Predictive Analytics</div>

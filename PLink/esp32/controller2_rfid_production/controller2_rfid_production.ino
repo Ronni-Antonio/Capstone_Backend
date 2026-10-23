@@ -56,7 +56,7 @@ static const char* DEVICE_KEY = "4ba00b9849eaeb6fdce45fb85e95f4326166014c50ba10d
 
 static const char* FALLBACK_WIFI_SSID = "roni";
 
-static const char* FALLBACK_WIFI_PASSWORD = "xmlxsldtd";
+static const char* FALLBACK_WIFI_PASSWORD = "xmlxsldtd1";
 
 
 
