@@ -67,17 +67,25 @@ class ReportsAnalyticsController extends Controller
 
     private function resolveRange(Request $request): array
     {
-        $validated = $request->validate([
-            'days' => 'nullable|integer|min:7|max:365',
-            'from' => 'nullable|date',
-            'to' => 'nullable|date|after_or_equal:from',
+        // Accept the short query names used by the reports UI as well as the
+        // explicit names used by callers that serialize the field labels.
+        $fromInput = $request->input('from') ?? $request->input('from_date');
+        $toInput = $request->input('to') ?? $request->input('to_date');
+
+        $request->merge([
+            'from' => $this->normalizeDateInput($fromInput),
+            'to' => $this->normalizeDateInput($toInput),
         ]);
 
-        if (!empty($validated['from'])) {
+        $validated = $request->validate([
+            'days' => 'nullable|integer|min:7|max:365',
+            'from' => 'nullable|required_with:to|date',
+            'to' => 'nullable|required_with:from|date|after_or_equal:from',
+        ]);
+
+        if (!empty($validated['from']) && !empty($validated['to'])) {
             $from = Carbon::parse($validated['from'])->startOfDay();
-            $to = !empty($validated['to'])
-                ? Carbon::parse($validated['to'])->endOfDay()
-                : now()->endOfDay();
+            $to = Carbon::parse($validated['to'])->endOfDay();
         } else {
             $days = (int) ($validated['days'] ?? 30);
             $to = now()->endOfDay();
@@ -85,6 +93,19 @@ class ReportsAnalyticsController extends Controller
         }
 
         return [$from, $to];
+    }
+
+    private function normalizeDateInput(mixed $value): mixed
+    {
+        if (!is_string($value) || !preg_match('/^(\d{2})\/(\d{2})\/(\d{4})$/', $value, $matches)) {
+            return $value;
+        }
+
+        [$day, $month, $year] = [(int) $matches[1], (int) $matches[2], (int) $matches[3]];
+
+        return checkdate($month, $day, $year)
+            ? sprintf('%04d-%02d-%02d', $year, $month, $day)
+            : $value;
     }
 
     private function buildPayload(Carbon $from, Carbon $to): array
@@ -286,7 +307,7 @@ class ReportsAnalyticsController extends Controller
             'range' => [
                 'from' => $from->toDateString(),
                 'to' => $to->toDateString(),
-                'days' => $from->diffInDays($to) + 1,
+                'days' => (int) $from->copy()->startOfDay()->diffInDays($to->copy()->startOfDay()) + 1,
             ],
             'summary' => $summary,
             'daily_collection' => $dailyCollection,
